@@ -150,3 +150,4 @@ git push origin main
 - Add confidence thresholding for unknown gestures
 - Add dataset balancing and augmentation
 - Export the model to TensorFlow Lite for mobile deployment
+# Sign_Lang
