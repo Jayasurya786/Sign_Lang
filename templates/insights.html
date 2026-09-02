@@ -1,0 +1,25 @@
+{% extends 'base.html' %}
+
+{% block title %}Insights | Sign Language Recognition{% endblock %}
+
+{% block content %}
+  <section class="page-panel">
+    <div class="section-header"><span>Insights</span></div>
+    <div class="sparkline">
+      <svg viewBox="0 0 300 110" preserveAspectRatio="none" aria-label="Prediction trend chart">
+        <defs>
+          <linearGradient id="sparklineFill" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stop-color="#1d4ed8" stop-opacity="0.35"/>
+            <stop offset="100%" stop-color="#1d4ed8" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        <path d="M0 82 L35 72 L70 75 L110 58 L145 61 L180 42 L220 38 L260 24 L300 16 L300 110 L0 110 Z" fill="url(#sparklineFill)"/>
+        <path d="M0 82 L35 72 L70 75 L110 58 L145 61 L180 42 L220 38 L260 24 L300 16" fill="none" stroke="#1d4ed8" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+
+    <div class="section-header" style="margin-top:18px;"><span>History</span></div>
+    <div class="log" id="log-box">System ready. Camera will start when you click the live prediction button.</div>
+    <ul class="timeline-list" id="history-list"></ul>
+  </section>
+{% endblock %}

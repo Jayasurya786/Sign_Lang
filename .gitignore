@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# OS / editor settings
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Project data and generated output
+archive/
+archive (1)/
+data/online_asl/
+data/processed/
+*.log
+
+# Trained model files and reports
+src/models/*.keras
+src/models/*.json
+src/models/*.h5
+src/models/*.tflite
+src/models/model_quality.json
+
+# Test coverage / notebooks output
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# Environment files
+.env
+.env.*

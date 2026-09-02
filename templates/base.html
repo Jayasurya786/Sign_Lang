@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{% block title %}Sign Language Recognition{% endblock %}</title>
+    <style>
+      :root {
+        --bg: #edf5ff;
+        --bg-strong: #dfeeff;
+        --bg-soft: #f6faff;
+        --panel: #ffffff;
+        --panel-alt: #f8fbff;
+        --panel-soft: #edf5ff;
+        --primary: #1d4ed8;
+        --primary-2: #1e40af;
+        --primary-3: #172554;
+        --primary-soft: rgba(29, 78, 216, 0.12);
+        --accent: #4f8ef7;
+        --accent-2: #2563eb;
+        --accent-soft: rgba(79, 142, 247, 0.12);
+        --neutral: #475569;
+        --neutral-strong: #1e293b;
+        --neutral-soft: #eef5ff;
+        --success: #0ea5e9;
+        --warning: #f59e0b;
+        --danger: #ef4444;
+        --text: #142338;
+        --text-strong: #0f172a;
+        --muted: #53657d;
+        --muted-strong: #334155;
+        --border: rgba(30, 41, 59, 0.08);
+        --shadow: 0 18px 40px rgba(30, 64, 175, 0.10);
+        --radius: 22px;
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body {
+        margin: 0;
+        min-height: 100%;
+        font-family: 'Segoe UI', sans-serif;
+        background:
+          radial-gradient(circle at top left, rgba(29, 78, 216, 0.12), transparent 30%),
+          radial-gradient(circle at bottom right, rgba(79, 142, 247, 0.12), transparent 28%),
+          linear-gradient(180deg, var(--bg-strong) 0%, var(--bg) 100%);
+        color: var(--text);
+      }
+
+      body {
+        position: relative;
+        overflow-x: hidden;
+      }
+
+      a { color: inherit; text-decoration: none; }
+
+      .app-shell {
+        position: relative;
+        z-index: 1;
+        max-width: 1380px;
+        margin: 0 auto;
+        padding: 24px 18px 42px;
+      }
+
+      .glass,
+      .page-panel,
+      .feature-card,
+      .stat,
+      .dataset-card,
+      .chart-card,
+      .metric-card,
+      .quality-row,
+      .pair-row,
+      .difficulty-row {
+        background: rgba(255, 255, 255, 0.8);
+        border: 1px solid var(--border);
+        box-shadow: var(--shadow);
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        padding: 16px 18px;
+        margin-bottom: 22px;
+        border-radius: 22px;
+        background: rgba(255, 255, 255, 0.78);
+        border: 1px solid var(--border);
+        box-shadow: var(--shadow);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 1.08rem;
+        font-weight: 800;
+        letter-spacing: 0.01em;
+        color: var(--text-strong);
+      }
+
+      .brand-mark {
+        width: 42px;
+        height: 42px;
+        border-radius: 14px;
+        display: grid;
+        place-items: center;
+        background: linear-gradient(135deg, var(--primary), var(--primary-2));
+        color: #fff;
+        box-shadow: 0 12px 26px rgba(29, 78, 216, 0.22);
+      }
+
+      .brand-mark svg {
+        width: 20px;
+        height: 20px;
+        stroke: currentColor;
+        fill: none;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .top-nav {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .nav-tab {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 9px 12px;
+        border-radius: 11px;
+        color: var(--muted-strong);
+        background: transparent;
+        border: 1px solid transparent;
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        transition: all 0.2s ease;
+      }
+
+      .nav-tab.active,
+      .nav-tab:hover,
+      .nav-tab:focus-visible {
+        background: var(--primary-soft);
+        border-color: rgba(29, 78, 216, 0.18);
+        color: var(--text-strong);
+        outline: none;
+      }
+
+      .icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 18px;
+        height: 18px;
+        vertical-align: middle;
+      }
+
+      .icon svg {
+        width: 18px;
+        height: 18px;
+        stroke: currentColor;
+        fill: none;
+        stroke-width: 2.1;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .page-shell {
+        display: grid;
+        gap: 18px;
+      }
+
+      .page-panel {
+        padding: 18px;
+        border-radius: var(--radius);
+        background: rgba(255, 255, 255, 0.78);
+      }
+
+      .section-title {
+        font-size: clamp(2rem, 3vw, 3.1rem);
+        letter-spacing: -0.06em;
+        margin: 0;
+        line-height: 1.05;
+        color: var(--text-strong);
+      }
+
+      .subtitle {
+        margin: 0;
+        max-width: 62ch;
+        color: var(--muted);
+        line-height: 1.7;
+        font-size: 1rem;
+      }
+
+      .section-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 14px;
+        font-size: 0.72rem;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .button-row {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+
+      button {
+        border: none;
+        border-radius: 12px;
+        padding: 12px 18px;
+        font-size: 0.96rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition: transform 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease;
+      }
+
+      button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 12px 22px rgba(29, 78, 216, 0.12);
+      }
+
+      button:focus-visible,
+      input:focus-visible,
+      select:focus-visible,
+      a:focus-visible {
+        outline: 3px solid rgba(29, 78, 216, 0.2);
+        outline-offset: 2px;
+      }
+
+      .primary {
+        background: linear-gradient(135deg, var(--primary), var(--primary-2));
+        color: #fff;
+      }
+
+      .secondary {
+        background: rgba(29, 78, 216, 0.06);
+        color: var(--text-strong);
+        border: 1px solid rgba(29, 78, 216, 0.14);
+      }
+
+      .hero {
+        display: grid;
+        gap: 20px;
+      }
+
+      .feature-row {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .feature-card {
+        padding: 16px;
+        display: grid;
+        gap: 8px;
+      }
+
+      .feature-title {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-weight: 700;
+        color: var(--text-strong);
+      }
+
+      .feature-icon {
+        width: 28px;
+        height: 28px;
+        border-radius: 10px;
+        display: grid;
+        place-items: center;
+        background: var(--primary-soft);
+        color: var(--primary-2);
+      }
+
+      .feature-icon svg {
+        width: 16px;
+        height: 16px;
+        stroke: currentColor;
+        fill: none;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .feature-card p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.6;
+        font-size: 0.9rem;
+      }
+
+      .output-card {
+        display: grid;
+        gap: 16px;
+      }
+
+      .preview {
+        width: 100%;
+        height: 380px;
+        border-radius: 18px;
+        object-fit: cover;
+        border: 1px solid rgba(30, 41, 59, 0.08);
+        background: linear-gradient(135deg, rgba(29, 78, 216, 0.08), rgba(79, 142, 247, 0.06));
+      }
+
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
+      }
+
+      .stat {
+        padding: 16px;
+      }
+
+      .stat-label {
+        display: block;
+        color: var(--muted);
+        font-size: 0.8rem;
+        margin-bottom: 8px;
+      }
+
+      .stat-value {
+        font-size: clamp(1.35rem, 2vw, 1.8rem);
+        font-weight: 800;
+        color: var(--text-strong);
+      }
+
+      .dataset-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 14px;
+      }
+
+      .dataset-card {
+        display: grid;
+        gap: 12px;
+        padding: 16px;
+      }
+
+      .dataset-card-head,
+      .chip-row,
+      .dataset-card-footer,
+      .progress-meta,
+      .quality-header,
+      .difficulty-row,
+      .pair-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .dataset-card h3,
+      .metric-card strong,
+      .stat-value {
+        margin: 0;
+        color: var(--text-strong);
+      }
+
+      .dataset-badge {
+        width: 36px;
+        height: 36px;
+        border-radius: 12px;
+        display: grid;
+        place-items: center;
+        background: var(--primary-soft);
+        color: var(--primary-2);
+        font-weight: 800;
+      }
+
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: var(--neutral-soft);
+        color: var(--muted-strong);
+        font-size: 0.71rem;
+        font-weight: 700;
+      }
+
+      .chip-row {
+        justify-content: flex-start;
+        flex-wrap: wrap;
+      }
+
+      .dataset-health-list,
+      .progress-stack,
+      .quality-list,
+      .difficulty-list,
+      .pair-list {
+        display: grid;
+        gap: 12px;
+      }
+
+      .dataset-health-item,
+      .progress-row,
+      .quality-row,
+      .pair-row,
+      .difficulty-row {
+        display: grid;
+        gap: 8px;
+      }
+
+      .dataset-health-track,
+      .progress-track {
+        width: 100%;
+        height: 10px;
+        border-radius: 999px;
+        background: rgba(31, 41, 59, 0.06);
+        overflow: hidden;
+      }
+
+      .dataset-health-fill,
+      .progress-fill {
+        display: block;
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(135deg, var(--primary), var(--accent));
+      }
+
+      .metric-list {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .metric-card {
+        display: grid;
+        gap: 8px;
+        padding: 16px;
+      }
+
+      .metric-label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 0.8rem;
+        font-weight: 700;
+      }
+
+      .metric-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 24px;
+        height: 24px;
+        border-radius: 8px;
+        background: var(--primary-soft);
+        color: var(--primary-2);
+      }
+
+      .analytics-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+        gap: 18px;
+      }
+
+      .chart-bars {
+        display: flex;
+        align-items: end;
+        gap: 8px;
+        min-height: 120px;
+        padding-top: 14px;
+      }
+
+      .chart-bar {
+        flex: 1;
+        min-height: 10%;
+        height: var(--value);
+        border-radius: 14px 14px 6px 6px;
+        background: linear-gradient(180deg, var(--primary), rgba(29, 78, 216, 0.5));
+      }
+
+      .quality-list {
+        display: grid;
+        gap: 12px;
+      }
+
+      .quality-row {
+        padding: 12px 14px;
+        display: grid;
+        gap: 8px;
+      }
+
+      .heatmap-grid {
+        display: grid;
+        gap: 8px;
+        overflow: auto;
+      }
+
+      .heatmap-row {
+        display: grid;
+        grid-template-columns: 86px repeat(var(--columns), minmax(26px, 1fr));
+        gap: 6px;
+        align-items: center;
+      }
+
+      .heatmap-label {
+        font-size: 0.72rem;
+        color: var(--muted-strong);
+        font-weight: 700;
+      }
+
+      .heatmap-cell {
+        display: grid;
+        place-items: center;
+        min-height: 28px;
+        border-radius: 8px;
+        color: var(--text-strong);
+        font-size: 0.72rem;
+        font-weight: 700;
+      }
+
+      .sparkline {
+        width: 100%;
+        background: linear-gradient(180deg, rgba(29, 78, 216, 0.04), rgba(79, 142, 247, 0.04));
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 8px;
+      }
+
+      .sparkline svg {
+        display: block;
+        width: 100%;
+        height: 110px;
+      }
+
+      .log {
+        padding: 14px 16px;
+        border-radius: 14px;
+        background: rgba(255,255,255,0.72);
+        border: 1px solid var(--border);
+        color: var(--muted-strong);
+        line-height: 1.6;
+      }
+
+      .timeline-list {
+        list-style: none;
+        padding: 0;
+        margin: 16px 0 0;
+        display: grid;
+        gap: 12px;
+      }
+
+      .timeline-item {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: center;
+        background: rgba(255,255,255,0.7);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 12px 14px;
+      }
+
+      .timeline-bullet {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        background: var(--primary-soft);
+        color: var(--primary-2);
+        font-weight: 800;
+      }
+
+      .timeline-copy {
+        display: grid;
+        gap: 6px;
+      }
+
+      .timeline-copy strong {
+        color: var(--text-strong);
+      }
+
+      .timeline-copy small {
+        color: var(--muted);
+      }
+
+      .timeline-bar {
+        width: 100%;
+        height: 8px;
+        border-radius: 999px;
+        background: rgba(31,41,59,0.06);
+        overflow: hidden;
+      }
+
+      .timeline-bar span {
+        display: block;
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(135deg, var(--primary), var(--accent));
+      }
+
+      .timeline-score {
+        text-align: right;
+      }
+
+      .timeline-score strong {
+        display: block;
+        color: var(--text-strong);
+      }
+
+      .timeline-score span {
+        color: var(--muted);
+        font-size: 0.75rem;
+      }
+
+      @media (max-width: 980px) {
+        .hero-grid,
+        .analytics-grid,
+        .feature-row {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 720px) {
+        .topbar {
+          flex-wrap: wrap;
+          align-items: flex-start;
+        }
+
+        .top-nav {
+          display: none;
+          width: 100%;
+          padding-top: 8px;
+        }
+
+        .top-nav.open {
+          display: flex;
+          flex-direction: column;
+          align-items: stretch;
+        }
+
+        .nav-tab {
+          width: 100%;
+          text-align: center;
+        }
+
+        .dataset-filters,
+        .metric-list,
+        .stats {
+          grid-template-columns: 1fr;
+        }
+
+        .page-panel {
+          padding: 16px;
+        }
+
+        .section-title {
+          font-size: 2.1rem;
+        }
+      }
+
+      @media (min-width: 721px) {
+        .mobile-menu-btn {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar glass">
+        <div class="brand">
+          <div class="brand-mark" aria-label="Sign Language Recognition logo">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8 9.5V4.8A1.8 1.8 0 0 1 9.8 3h.5A1.7 1.7 0 0 1 12 4.7v5.5"/>
+              <path d="M12 8.5v7.2a2.4 2.4 0 0 1-2.4 2.4H9a2.6 2.6 0 0 1-2.6-2.6V12"/>
+              <path d="M16 9.5V4.8A1.8 1.8 0 0 0 14.2 3h-.5A1.7 1.7 0 0 0 12 4.7v5.5"/>
+              <path d="M12 8.5v7.2a2.4 2.4 0 0 0 2.4 2.4H15c1.4 0 2.6-1.1 2.6-2.6V12"/>
+              <path d="M4 14c1.5 1.7 3.5 2.5 6 2.5 2.4 0 4.4-.7 6-2.5"/>
+            </svg>
+          </div>
+          <span>Sign Language Recognition</span>
+        </div>
+
+        <nav class="top-nav" id="main-nav" aria-label="Main navigation">
+          <a class="nav-tab {% if active_page == 'home' %}active{% endif %}" href="/"><span class="icon"><svg viewBox="0 0 24 24"><path d="M3 12.5 12 4l9 8.5"/><path d="M5 10.5V19h14v-8.5"/></svg></span>Home</a>
+          <a class="nav-tab {% if active_page == 'dataset' %}active{% endif %}" href="/dataset"><span class="icon"><svg viewBox="0 0 24 24"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v9A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5z"/><path d="M8 9h8M8 13h8"/></svg></span>Dataset</a>
+          <a class="nav-tab {% if active_page == 'model' %}active{% endif %}" href="/model"><span class="icon"><svg viewBox="0 0 24 24"><path d="M5 18V8.5A2.5 2.5 0 0 1 7.5 6H12v12H7.5A2.5 2.5 0 0 1 5 18z"/><path d="M12 6h4.5A2.5 2.5 0 0 1 19 8.5V18a2.5 2.5 0 0 1-2.5 2.5H12z"/><path d="M9 10h.01M15 10h.01M9 14h.01M15 14h.01"/></svg></span>Model</a>
+          <a class="nav-tab {% if active_page == 'insights' %}active{% endif %}" href="/insights"><span class="icon"><svg viewBox="0 0 24 24"><path d="M5 18h14"/><path d="M7 15V9"/><path d="M12 15V5"/><path d="M17 15v-7"/></svg></span>Insights</a>
+        </nav>
+
+        <button class="mobile-menu-btn" id="mobile-menu-toggle" type="button" aria-label="Open navigation menu">
+          <span class="icon"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></span>
+        </button>
+      </header>
+
+      <main class="page-shell">
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+
+    <script>
+      const mobileMenuToggle = document.getElementById('mobile-menu-toggle');
+      const mainNav = document.getElementById('main-nav');
+      if (mobileMenuToggle && mainNav) {
+        mobileMenuToggle.addEventListener('click', () => {
+          mainNav.classList.toggle('open');
+        });
+      }
+    </script>
+  </body>
+</html>

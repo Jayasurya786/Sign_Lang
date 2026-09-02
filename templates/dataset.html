@@ -1,0 +1,195 @@
+{% extends 'base.html' %}
+
+{% block title %}Dataset | Sign Language Recognition{% endblock %}
+
+{% block content %}
+  <section class="page-panel">
+    <div class="section-header"><span>Dataset summary</span></div>
+    <div class="dataset-grid" id="dataset-metrics" style="margin-bottom: 18px;">
+      <div class="dataset-card">
+        <div class="dataset-card-head">
+          <div class="dataset-badge">#</div>
+          <span class="chip">online dataset</span>
+        </div>
+        <div>
+          <h3 id="dataset-total-rows">--</h3>
+          <small>Total online images</small>
+        </div>
+      </div>
+      <div class="dataset-card">
+        <div class="dataset-card-head">
+          <div class="dataset-badge">C</div>
+          <span class="chip">online dataset</span>
+        </div>
+        <div>
+          <h3 id="dataset-classes">--</h3>
+          <small>Unique classes</small>
+        </div>
+      </div>
+      <div class="dataset-card">
+        <div class="dataset-card-head">
+          <div class="dataset-badge">S</div>
+          <span class="chip">online dataset</span>
+        </div>
+        <div>
+          <h3 id="dataset-cleaned">--</h3>
+          <small>Cleaned samples</small>
+        </div>
+      </div>
+      <div class="dataset-card">
+        <div class="dataset-card-head">
+          <div class="dataset-badge">R</div>
+          <span class="chip">model availability</span>
+        </div>
+        <div>
+          <h3 id="dataset-status">--</h3>
+          <small>Model availability</small>
+        </div>
+      </div>
+    </div>
+
+    <div class="dataset-filters" style="display:grid;grid-template-columns:minmax(0,1.5fr) minmax(160px,220px);gap:12px;">
+      <div class="field">
+        <label for="dataset-search">Search classes</label>
+        <input id="dataset-search" type="search" placeholder="Filter by label, quality, or tag..." />
+      </div>
+      <div class="field">
+        <label for="dataset-filter">Filter</label>
+        <select id="dataset-filter">
+          <option value="all">All</option>
+          <option value="low">Low quality</option>
+          <option value="balanced">Balanced</option>
+        </select>
+      </div>
+    </div>
+
+    <div style="margin-top:18px;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;">
+      <div>
+        <div class="section-header" style="margin-bottom:12px;"><span>Class health</span></div>
+        <div class="dataset-health-list" id="dataset-health-list"></div>
+      </div>
+      <div>
+        <div class="section-header" style="margin-bottom:12px;"><span>Split overview</span></div>
+        <div class="progress-stack" id="dataset-split-overview"></div>
+      </div>
+    </div>
+
+    <div class="section-header" style="margin-top:20px;"><span>Dataset cards</span></div>
+    <div class="dataset-grid" id="dataset-grid"></div>
+  </section>
+
+  <script>
+    const datasetSearch = document.getElementById('dataset-search');
+    const datasetFilter = document.getElementById('dataset-filter');
+    const datasetTotalRowsEl = document.getElementById('dataset-total-rows');
+    const datasetClassesEl = document.getElementById('dataset-classes');
+    const datasetCleanedEl = document.getElementById('dataset-cleaned');
+    const datasetStatusEl = document.getElementById('dataset-status');
+    const datasetHealthList = document.getElementById('dataset-health-list');
+    const datasetSplitOverview = document.getElementById('dataset-split-overview');
+    const datasetGrid = document.getElementById('dataset-grid');
+
+    function renderDatasetHealth(data) {
+      const distribution = Array.isArray(data.class_distribution) ? data.class_distribution : [];
+      const maxCount = distribution.length ? Math.max(...distribution.map((item) => Number(item.count || 0))) : 1;
+
+      datasetHealthList.innerHTML = distribution.slice(0, 8).map((item) => {
+        const count = Number(item.count || 0);
+        const quality = Math.min(100, Math.round((count / maxCount) * 100));
+        const label = item.label || 'unknown';
+        return `
+          <div class="dataset-health-item">
+            <div class="dataset-health-meta">
+              <strong>${label}</strong>
+              <span>${count} samples</span>
+            </div>
+            <div class="dataset-health-track">
+              <span class="dataset-health-fill" style="width: ${Math.max(8, quality)}%"></span>
+            </div>
+          </div>
+        `;
+      }).join('') || '<div class="dataset-health-item"><div class="dataset-health-meta"><strong>No data</strong></div></div>';
+
+      const split = data.split_overview || { train: 0, validation: 0, test: 0 };
+      const totalSplit = Math.max(1, Number(split.train || 0) + Number(split.validation || 0) + Number(split.test || 0));
+      const splitItems = [
+        { label: 'Train', value: Number(split.train || 0) },
+        { label: 'Validation', value: Number(split.validation || 0) },
+        { label: 'Test', value: Number(split.test || 0) },
+      ];
+
+      datasetSplitOverview.innerHTML = splitItems.map((entry) => {
+        const pct = Math.max(8, (entry.value / totalSplit) * 100);
+        return `
+          <div class="progress-row">
+            <div class="progress-meta"><span>${entry.label}</span><strong>${entry.value}</strong></div>
+            <div class="progress-track"><span class="progress-fill" style="width: ${pct}%"></span></div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderDatasetCards(data) {
+      const distribution = Array.isArray(data.class_distribution) ? data.class_distribution : [];
+      const query = (datasetSearch?.value || '').trim().toLowerCase();
+      const filter = datasetFilter?.value || 'all';
+
+      const filtered = distribution.filter((item) => {
+        const label = String(item.label || '');
+        const count = Number(item.count || 0);
+        const matchesQuery = !query || label.toLowerCase().includes(query) || String(count).includes(query);
+        const status = count < 20 ? 'low' : 'balanced';
+        const matchesFilter = filter === 'all' || status === filter;
+        return matchesQuery && matchesFilter;
+      });
+
+      datasetGrid.innerHTML = filtered.length
+        ? filtered.map((item) => {
+            const label = String(item.label || 'unknown');
+            const count = Number(item.count || 0);
+            const status = count < 20 ? 'low quality' : 'balanced';
+            return `
+              <article class="dataset-card">
+                <div class="dataset-card-head">
+                  <div class="dataset-badge">${label.slice(0, 1).toUpperCase()}</div>
+                  <span class="chip">${status}</span>
+                </div>
+                <div>
+                  <h3>${label}</h3>
+                  <small>${count} samples</small>
+                </div>
+                <div class="chip-row">
+                  <span class="chip">${count < 20 ? 'needs review' : 'stable'}</span>
+                </div>
+              </article>
+            `;
+          }).join('')
+        : '<div class="dataset-card"><h3>No matching classes</h3><small>Try another search term or filter.</small></div>';
+    }
+
+    async function loadDatasetStats() {
+      try {
+        const response = await fetch('/api/dataset-stats');
+        const data = await response.json();
+
+        datasetTotalRowsEl.textContent = Number(data.total_rows || 0).toLocaleString();
+        datasetClassesEl.textContent = Number(data.classes_available || 0).toLocaleString();
+        datasetCleanedEl.textContent = Number(data.cleaned_sample_count || 0).toLocaleString();
+        datasetStatusEl.textContent = data.last_training_status || 'not trained';
+        renderDatasetHealth(data);
+        renderDatasetCards(data);
+      } catch (error) {
+        datasetTotalRowsEl.textContent = '0';
+        datasetClassesEl.textContent = '0';
+        datasetCleanedEl.textContent = '0';
+        datasetStatusEl.textContent = 'unavailable';
+        renderDatasetHealth({ class_distribution: [], split_overview: { train: 0, validation: 0, test: 0 } });
+        renderDatasetCards({ class_distribution: [] });
+      }
+    }
+
+    datasetSearch?.addEventListener('input', () => loadDatasetStats());
+    datasetFilter?.addEventListener('change', () => loadDatasetStats());
+    loadDatasetStats();
+  </script>
+{% endblock %}

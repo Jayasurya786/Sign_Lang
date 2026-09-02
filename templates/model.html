@@ -1,0 +1,215 @@
+{% extends 'base.html' %}
+
+{% block title %}Model | Sign Language Recognition{% endblock %}
+
+{% block content %}
+  <section class="page-panel">
+    <div class="section-header"><span>Model</span></div>
+    <div class="analytics-grid">
+      <div class="chart-card">
+        <div class="section-header" style="margin-bottom:14px;"><span>Model analytics</span></div>
+        <div class="metric-list">
+          <div class="metric-card">
+            <div class="metric-label"><span class="metric-icon">A</span>Avg confidence</div>
+            <strong id="avg-confidence">--</strong>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label"><span class="metric-icon">F</span>Frames</div>
+            <strong id="frame-count">0</strong>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label"><span class="metric-icon">W</span>Words</div>
+            <strong id="word-count">0</strong>
+          </div>
+        </div>
+        <div class="chart-bars" id="chart-bars"></div>
+      </div>
+
+      <div class="analytics-side">
+        <div class="section-header" style="margin-bottom:14px;"><span>Performance</span></div>
+        <div class="progress-stack">
+          <div class="progress-row">
+            <div class="progress-meta"><span>Accuracy</span><strong id="overall-accuracy">--</strong></div>
+            <div class="progress-track"><span class="progress-fill" id="accuracy-fill" style="width: 0%"></span></div>
+          </div>
+          <div class="progress-row">
+            <div class="progress-meta"><span>Precision</span><strong id="overall-precision">--</strong></div>
+            <div class="progress-track"><span class="progress-fill" id="precision-fill" style="width: 0%"></span></div>
+          </div>
+          <div class="progress-row">
+            <div class="progress-meta"><span>Recall</span><strong id="overall-recall">--</strong></div>
+            <div class="progress-track"><span class="progress-fill" id="recall-fill" style="width: 0%"></span></div>
+          </div>
+          <div class="progress-row">
+            <div class="progress-meta"><span>F1</span><strong id="overall-f1">--</strong></div>
+            <div class="progress-track"><span class="progress-fill" id="f1-fill" style="width: 0%"></span></div>
+          </div>
+        </div>
+        <div class="quality-list" id="class-quality-list"></div>
+      </div>
+    </div>
+
+    <div class="analytics-grid" style="margin-top:18px;">
+      <div class="chart-card">
+        <div class="section-header" style="margin-bottom:10px;"><span>Confusion matrix</span></div>
+        <div class="heatmap-grid" id="confusion-heatmap"></div>
+      </div>
+      <div class="chart-card">
+        <div class="section-header" style="margin-bottom:10px;"><span>Class difficulty</span></div>
+        <div class="difficulty-list" id="difficulty-ranking"></div>
+      </div>
+    </div>
+
+    <div class="chart-card" style="margin-top:18px;">
+      <div class="section-header" style="margin-bottom:10px;"><span>Most confused pairs</span></div>
+      <div class="pair-list" id="most-confused-pairs"></div>
+    </div>
+  </section>
+
+  <script>
+    const overallAccuracyEl = document.getElementById('overall-accuracy');
+    const overallPrecisionEl = document.getElementById('overall-precision');
+    const overallRecallEl = document.getElementById('overall-recall');
+    const overallF1El = document.getElementById('overall-f1');
+    const accuracyFill = document.getElementById('accuracy-fill');
+    const precisionFill = document.getElementById('precision-fill');
+    const recallFill = document.getElementById('recall-fill');
+    const f1Fill = document.getElementById('f1-fill');
+    const classQualityList = document.getElementById('class-quality-list');
+    const confusionHeatmap = document.getElementById('confusion-heatmap');
+    const difficultyRanking = document.getElementById('difficulty-ranking');
+    const mostConfusedPairs = document.getElementById('most-confused-pairs');
+
+    function renderConfusionMatrix(report) {
+      const matrix = Array.isArray(report?.confusion_matrix?.matrix) ? report.confusion_matrix.matrix : [];
+      const labels = Array.isArray(report?.confusion_matrix?.labels) ? report.confusion_matrix.labels : [];
+
+      if (!matrix.length || !labels.length) {
+        confusionHeatmap.innerHTML = '<div class="quality-row"><div class="quality-header"><span>No confusion matrix</span></div><div class="quality-meta"><span>Train a model to generate validation-class confusion data.</span></div></div>';
+        return;
+      }
+
+      const maxVal = Math.max(1, ...matrix.flat());
+      const header = ['<div class="heatmap-label">Actual ↓ / Predicted →</div>']
+        .concat(labels.map((label) => `<div class="heatmap-label">${label}</div>`))
+        .join('');
+
+      const rows = matrix.map((row, rowIndex) => {
+        const cells = row.map((value) => {
+          const intensity = Math.max(0.18, value / maxVal);
+          const bg = `rgba(59, 130, 246, ${0.15 + intensity * 0.65})`;
+          return `<div class="heatmap-cell" style="background:${bg}" title="Actual ${labels[rowIndex]} / Predicted ${labels[rowIndex]}: ${value} samples">${value}</div>`;
+        }).join('');
+        return `<div class="heatmap-row" style="--columns:${labels.length}"><div class="heatmap-label">${labels[rowIndex]}</div>${cells}</div>`;
+      }).join('');
+
+      confusionHeatmap.innerHTML = `<div class="heatmap-row" style="--columns:${labels.length}">${header}</div>${rows}`;
+    }
+
+    function renderDifficultyRanking(report) {
+      const ranking = Array.isArray(report?.difficulty_ranking) ? report.difficulty_ranking : [];
+      if (!ranking.length) {
+        difficultyRanking.innerHTML = '<div class="quality-row"><div class="quality-header"><span>No difficulty ranking</span></div><div class="quality-meta"><span>Model evaluation data is still loading.</span></div></div>';
+        return;
+      }
+
+      difficultyRanking.innerHTML = ranking.slice(0, 5).map((item, index) => `
+        <div class="difficulty-row">
+          <div>
+            <strong>#${index + 1} · Class ${item.label}</strong><br />
+            <span>support ${item.support} · recall ${(Number(item.recall || 0) * 100).toFixed(1)}%</span>
+          </div>
+          <strong>${(Number(item.difficulty || 0) * 100).toFixed(1)}%</strong>
+        </div>
+      `).join('');
+    }
+
+    function renderMostConfusedPairs(report) {
+      const pairs = Array.isArray(report?.most_confused_pairs) ? report.most_confused_pairs : [];
+      if (!pairs.length) {
+        mostConfusedPairs.innerHTML = '<div class="pair-row"><div><strong>No confusion pairs</strong><br /><span>Validation errors are not yet available.</span></div><strong>0</strong></div>';
+        return;
+      }
+
+      mostConfusedPairs.innerHTML = pairs.slice(0, 5).map((pair) => `
+        <div class="pair-row">
+          <div>
+            <strong>${pair.actual} → ${pair.predicted}</strong><br />
+            <span>misclassified ${pair.count} times</span>
+          </div>
+          <strong>${(Number(pair.severity || 0) * 100).toFixed(1)}%</strong>
+        </div>
+      `).join('');
+    }
+
+    function renderModelQuality(report) {
+      const metrics = Array.isArray(report?.per_class_metrics) ? report.per_class_metrics : [];
+      if (!metrics.length) {
+        classQualityList.innerHTML = '<div class="quality-row"><div class="quality-header"><span>No class metrics yet</span></div><div class="quality-meta"><span>Train the model to populate validation quality.</span></div></div>';
+        renderConfusionMatrix(report);
+        renderDifficultyRanking(report);
+        renderMostConfusedPairs(report);
+        return;
+      }
+
+      classQualityList.innerHTML = metrics.slice(0, 6).map((item) => {
+        const label = String(item.label ?? 'unknown');
+        const quality = Math.max(0, Math.min(100, (Number(item.quality_score ?? 0) || 0) * 100));
+        const accuracy = Math.max(0, Math.min(100, (Number(item.accuracy ?? 0) || 0) * 100));
+        const recall = Math.max(0, Math.min(100, (Number(item.recall ?? 0) || 0) * 100));
+        const confusion = Math.max(0, Math.min(100, (Number(item.confusion_score ?? 0) || 0) * 100));
+        return `
+          <div class="quality-row">
+            <div class="quality-header">
+              <span>Class ${label}</span>
+              <strong>${quality.toFixed(1)}%</strong>
+            </div>
+            <div class="progress-track"><span class="progress-fill" style="width: ${quality}%"></span></div>
+            <div class="quality-meta">
+              <span>Acc ${accuracy.toFixed(1)}%</span>
+              <span>Recall ${recall.toFixed(1)}%</span>
+              <span>Conf ${confusion.toFixed(1)}%</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      if (report?.overall) {
+        const overall = report.overall;
+        const accuracy = Number(overall.accuracy || 0) * 100;
+        const precision = Number(overall.precision || 0) * 100;
+        const recall = Number(overall.recall || 0) * 100;
+        const f1 = Number(overall.f1_score || 0) * 100;
+
+        overallAccuracyEl.textContent = `${accuracy.toFixed(1)}%`;
+        overallPrecisionEl.textContent = `${precision.toFixed(1)}%`;
+        overallRecallEl.textContent = `${recall.toFixed(1)}%`;
+        overallF1El.textContent = `${f1.toFixed(1)}%`;
+
+        accuracyFill.style.width = `${Math.min(100, accuracy)}%`;
+        precisionFill.style.width = `${Math.min(100, precision)}%`;
+        recallFill.style.width = `${Math.min(100, recall)}%`;
+        f1Fill.style.width = `${Math.min(100, f1)}%`;
+      }
+
+      renderConfusionMatrix(report);
+      renderDifficultyRanking(report);
+      renderMostConfusedPairs(report);
+    }
+
+    async function loadModelMetrics() {
+      try {
+        const res = await fetch('/api/model-metrics');
+        const report = await res.json();
+        renderModelQuality(report);
+      } catch (error) {
+        classQualityList.innerHTML = '<div class="quality-row"><div class="quality-header"><span>Metrics unavailable</span></div><div class="quality-meta"><span>Train the model to generate validation quality scores.</span></div></div>';
+        confusionHeatmap.innerHTML = '<div class="quality-row"><div class="quality-header"><span>Heatmap unavailable</span></div><div class="quality-meta"><span>Train the model to generate confusion data.</span></div></div>';
+        difficultyRanking.innerHTML = '<div class="quality-row"><div class="quality-header"><span>Ranking unavailable</span></div><div class="quality-meta"><span>Model metrics have not been generated.</span></div></div>';
+        mostConfusedPairs.innerHTML = '<div class="pair-row"><div><strong>No confusion pairs</strong><br /><span>Validation errors are not yet available.</span></div><strong>0</strong></div>';
+      }
+    }
+
+    loadModelMetrics();
+  </script>
+{% endblock %}

@@ -1,0 +1,306 @@
+{% extends 'base.html' %}
+
+{% block title %}Home | Sign Language Recognition{% endblock %}
+
+{% block content %}
+  <section class="page-panel hero">
+    <div>
+      <div class="section-header"><span>Overview</span></div>
+      <h1 class="section-title">Real-time sign recognition</h1>
+      <p class="subtitle">
+        A landmark-based sign-language classifier for live gesture prediction, trained with a BiLSTM model and built for a clean, mobile-friendly blue dashboard.
+      </p>
+    </div>
+
+    <div class="button-row">
+      <button class="primary" id="train-btn"><span class="icon"><svg viewBox="0 0 24 24"><path d="M13 2v8h8"/><path d="M13 10 20 3"/><path d="M4 14v4.5A2.5 2.5 0 0 0 6.5 21H18a2 2 0 0 0 2-2v-3"/><path d="M4 14l6.5-6.5 3 3L20 4"/></svg></span>Train model</button>
+      <button class="secondary" id="predict-btn"><span class="icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5"/></svg></span>Use webcam</button>
+      <button class="secondary" id="refresh-dataset-btn"><span class="icon"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.35-5.65"/><path d="M20 4v6h-6"/></svg></span>Refresh dataset</button>
+    </div>
+
+    <div class="feature-row">
+      <div class="feature-card">
+        <div class="feature-title"><span class="feature-icon"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M7 19h10M10 9h4M10 12h4"/></svg></span>Live capture</div>
+        <p>Real-time sign inference with hand landmark sampling and confidence scoring.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-title"><span class="feature-icon"><svg viewBox="0 0 24 24"><path d="M12 3v5m0 8v5M4.93 4.93l3.54 3.54m7.06 7.06 3.54 3.54M3 12h5m8 0h5M4.93 19.07l3.54-3.54m7.06-7.06 3.54-3.54"/><circle cx="12" cy="12" r="3"/></svg></span>Model health</div>
+        <p>Instant readiness checks, accuracy signals, and live training status visibility.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-title"><span class="feature-icon"><svg viewBox="0 0 24 24"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v11A2.5 2.5 0 0 1 17.5 20h-11A2.5 2.5 0 0 1 4 17.5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></span>Dataset flow</div>
+        <p>Collect, refine, and organize samples into a cleaner prediction-ready dataset.</p>
+      </div>
+    </div>
+
+    <div class="output-card">
+      <video class="preview" id="preview" autoplay playsinline muted></video>
+      <div class="stats">
+        <div class="stat">
+          <span class="stat-label">Prediction</span>
+          <span class="stat-value" id="prediction-value">--</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Sentence</span>
+          <span class="stat-value" id="sentence-value">--</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Confidence</span>
+          <span class="stat-value" id="confidence-value">--</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Model status</span>
+          <span class="stat-value" id="model-status">Idle</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <script>
+    const preview = document.getElementById('preview');
+    const predictionValue = document.getElementById('prediction-value');
+    const sentenceValue = document.getElementById('sentence-value');
+    const confidenceValue = document.getElementById('confidence-value');
+    const modelStatus = document.getElementById('model-status');
+    const trainBtn = document.getElementById('train-btn');
+    const predictBtn = document.getElementById('predict-btn');
+    const refreshDatasetBtn = document.getElementById('refresh-dataset-btn');
+
+    let streamActive = false;
+    let currentStream = null;
+    let predictionTimer = null;
+    let letterWindow = [];
+    let lastPredictionAt = 0;
+    let candidateLabel = '';
+    let candidateCount = 0;
+    let recentPredictions = [];
+
+    function setStatusMessage(message) {
+      modelStatus.textContent = message;
+    }
+
+    async function trainModel() {
+      trainBtn.disabled = true;
+      setStatusMessage('Training');
+      const statusTimer = setInterval(async () => {
+        try {
+          const statusResponse = await fetch('/api/train-status');
+          const status = await statusResponse.json();
+          if (status.message) setStatusMessage(status.message);
+        } catch (error) {
+          console.warn('Training status unavailable', error);
+        }
+      }, 1000);
+      try {
+        const res = await fetch('/api/train', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || 'Training failed');
+        setStatusMessage('Ready');
+        predictionValue.textContent = 'Trained';
+        confidenceValue.textContent = `${(Number(data.last_accuracy || 0) * 100).toFixed(1)}%`;
+      } catch (error) {
+        setStatusMessage('Error');
+        predictionValue.textContent = '--';
+        confidenceValue.textContent = '--';
+        console.error(error);
+      } finally {
+        clearInterval(statusTimer);
+        trainBtn.disabled = false;
+      }
+    }
+
+    async function refreshDatasetStats() {
+      try {
+        const res = await fetch('/api/dataset-stats');
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.message || 'Dataset stats unavailable');
+        }
+        console.log('Dataset stats refreshed', data);
+      } catch (error) {
+        console.error(error);
+      }
+    }
+
+    function updatePreviewText(label) {
+      const cleanLabel = String(label || '').trim().toUpperCase();
+      if (!cleanLabel || cleanLabel === 'UNKNOWN') {
+        predictionValue.textContent = 'Unknown';
+        confidenceValue.textContent = '0.0%';
+        candidateLabel = '';
+        candidateCount = 0;
+        return;
+      }
+
+      recentPredictions.push(cleanLabel);
+      if (recentPredictions.length > 5) {
+        recentPredictions.shift();
+      }
+      const votes = recentPredictions.reduce((counts, value) => {
+        counts[value] = (counts[value] || 0) + 1;
+        return counts;
+      }, {});
+      const stableLabel = Object.entries(votes).sort((left, right) => right[1] - left[1])[0];
+      if (!stableLabel || stableLabel[1] < 2) {
+        predictionValue.textContent = 'Analysing...';
+        return;
+      }
+      const votedLabel = stableLabel[0];
+
+      if (candidateLabel === votedLabel) {
+        candidateCount += 1;
+      } else {
+        candidateLabel = votedLabel;
+        candidateCount = 1;
+      }
+      if (candidateCount < 2) {
+        predictionValue.textContent = 'Analysing...';
+        return;
+      }
+
+      const now = Date.now();
+      if (letterWindow.length && now - lastPredictionAt > 2200) {
+        letterWindow = [];
+      }
+      lastPredictionAt = now;
+
+      if (letterWindow.length && letterWindow[letterWindow.length - 1] === cleanLabel) {
+        const word = letterWindow.join('');
+        predictionValue.textContent = word;
+        sentenceValue.textContent = word;
+        return;
+      }
+
+      letterWindow.push(cleanLabel);
+      if (letterWindow.length > 20) {
+        letterWindow = letterWindow.slice(-20);
+      }
+
+      const word = letterWindow.join('');
+      predictionValue.textContent = word;
+      sentenceValue.textContent = word;
+    }
+
+    function stopCamera() {
+      if (predictionTimer) {
+        clearInterval(predictionTimer);
+        predictionTimer = null;
+      }
+      if (currentStream) {
+        currentStream.getTracks().forEach((track) => track.stop());
+        currentStream = null;
+      }
+      if (preview) {
+        preview.srcObject = null;
+      }
+      streamActive = false;
+      letterWindow = [];
+      candidateLabel = '';
+      candidateCount = 0;
+      recentPredictions = [];
+      sentenceValue.textContent = '--';
+      setStatusMessage('Idle');
+    }
+
+    function isValidDataUrl(value) {
+      return typeof value === 'string' && value.startsWith('data:image/') && value.includes(',');
+    }
+
+    async function startCamera() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('This browser does not support webcam access.');
+      }
+
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false,
+        });
+      } catch (error) {
+        throw new Error('Camera access was blocked or unavailable. Please allow camera permissions and try again.');
+      }
+
+      currentStream = stream;
+      preview.srcObject = stream;
+      preview.play();
+      streamActive = true;
+      setStatusMessage('Live');
+
+      predictionTimer = setInterval(async () => {
+        try {
+          if (!preview || !preview.videoWidth || !preview.videoHeight) {
+            return;
+          }
+
+          const canvas = document.createElement('canvas');
+          canvas.width = preview.videoWidth;
+          canvas.height = preview.videoHeight;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            throw new Error('The browser could not access the canvas context.');
+          }
+
+          ctx.drawImage(preview, 0, 0, canvas.width, canvas.height);
+          const image = canvas.toDataURL('image/jpeg', 0.9);
+
+          if (!isValidDataUrl(image)) {
+            throw new Error('Captured frame is not a valid image payload.');
+          }
+
+          const res = await fetch('/api/predict', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image, unknown_threshold: UNKNOWN_THRESHOLD }),
+          });
+
+          const data = await res.json();
+          if (!res.ok) {
+            console.warn('Prediction request failed:', data.message || 'unknown');
+            updatePreviewText('unknown');
+            return;
+          }
+
+          if (data.status !== 'success') {
+            console.warn('Prediction status was not success:', data);
+            return;
+          }
+
+          const displayLabel = data.label || 'Unknown';
+          updatePreviewText(displayLabel);
+          confidenceValue.textContent = `${(Number(data.confidence || 0) * 100).toFixed(1)}%`;
+          setStatusMessage(data.is_unknown ? 'Hold sign steady' : 'Live');
+        } catch (error) {
+          console.error(error);
+          predictionValue.textContent = '--';
+          sentenceValue.textContent = '--';
+          confidenceValue.textContent = '--';
+          setStatusMessage('Camera blocked');
+        }
+      }, 1500);
+    }
+
+    const UNKNOWN_THRESHOLD = 0.03;
+
+    trainBtn.addEventListener('click', trainModel);
+    refreshDatasetBtn.addEventListener('click', refreshDatasetStats);
+    predictBtn.addEventListener('click', async () => {
+      if (streamActive) {
+        stopCamera();
+        predictionValue.textContent = '--';
+        confidenceValue.textContent = '--';
+        return;
+      }
+
+      try {
+        await startCamera();
+      } catch (error) {
+        stopCamera();
+        setStatusMessage('Error');
+        predictionValue.textContent = '--';
+        confidenceValue.textContent = '--';
+        console.error(error);
+      }
+    });
+  </script>
+{% endblock %}
