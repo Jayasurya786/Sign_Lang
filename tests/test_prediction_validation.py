@@ -44,6 +44,16 @@ def test_resolve_prediction_label_accepts_low_configured_threshold():
     assert result['threshold'] == 0.02
 
 
+def test_update_prediction_buffer_accumulates_sentence_without_repeating_letter():
+    from app import update_prediction_buffer
+
+    assert update_prediction_buffer('H', now_ms=0) == 'H'
+    assert update_prediction_buffer('E', now_ms=500) == 'HE'
+    assert update_prediction_buffer('L', now_ms=1000) == 'HEL'
+    assert update_prediction_buffer('L', now_ms=1500) == 'HEL'
+    assert update_prediction_buffer('O', now_ms=2000) == 'HELO'
+
+
 def test_live_prediction_window_keeps_recent_frames():
     from app import LIVE_FEATURE_WINDOW
 
@@ -51,3 +61,22 @@ def test_live_prediction_window_keeps_recent_frames():
     LIVE_FEATURE_WINDOW.extend([[1.0, 2.0], [3.0, 4.0]])
     assert list(LIVE_FEATURE_WINDOW)[-1] == [3.0, 4.0]
     LIVE_FEATURE_WINDOW.clear()
+
+
+def test_live_sequence_uses_current_pose_for_every_timestep():
+    from app import build_live_sequence
+
+    sequence = build_live_sequence(np.array([1.0, 2.0]), sequence_length=3)
+
+    assert sequence.shape == (1, 3, 2)
+    assert np.array_equal(sequence[0], np.array([[1.0, 2.0]] * 3, dtype=np.float32))
+
+
+def test_unknown_prediction_does_not_raise_scope_error():
+    from app import clear_prediction_buffer, smooth_and_commit_prediction
+
+    clear_prediction_buffer()
+    result = smooth_and_commit_prediction('unknown', confidence=0.01, now_ms=0)
+
+    assert result['label'] == ''
+    assert result['word'] == ''

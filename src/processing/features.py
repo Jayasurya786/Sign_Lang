@@ -69,22 +69,51 @@ def _compute_sample_features(sample: np.ndarray) -> dict[str, float]:
     features: dict[str, float] = {}
 
     finger_pairs = [
+        ('wrist', 'thumb_tip'),
         ('wrist', 'index_tip'),
         ('wrist', 'middle_tip'),
         ('wrist', 'ring_tip'),
         ('wrist', 'pinky_tip'),
-        ('index_tip', 'thumb_tip'),
+        ('thumb_tip', 'index_tip'),
+        ('thumb_tip', 'middle_tip'),
+        ('thumb_tip', 'ring_tip'),
+        ('thumb_tip', 'pinky_tip'),
+        ('index_tip', 'middle_tip'),
+        ('middle_tip', 'ring_tip'),
+        ('ring_tip', 'pinky_tip'),
+        ('index_tip', 'pinky_tip'),
         ('index_mcp', 'index_tip'),
         ('middle_mcp', 'middle_tip'),
         ('ring_mcp', 'ring_tip'),
         ('pinky_mcp', 'pinky_tip'),
-        ('thumb_tip', 'index_tip'),
+        ('thumb_tip', 'index_mcp'),
+        ('thumb_tip', 'index_pip'),
+        ('thumb_tip', 'middle_mcp'),
+        ('thumb_tip', 'middle_pip'),
+        ('thumb_tip', 'ring_mcp'),
+        ('thumb_tip', 'ring_pip'),
+        ('thumb_tip', 'pinky_mcp'),
     ]
 
     for name_a, name_b in finger_pairs:
         idx_a = HAND_JOINTS[name_a]
         idx_b = HAND_JOINTS[name_b]
         features[f'dist_{name_a}_{name_b}'] = _euclidean_distance(sample[idx_a], sample[idx_b])
+
+    # Extension / curl ratios: ratio of wrist-to-fingertip vs wrist-to-MCP
+    wrist_pt = sample[HAND_JOINTS['wrist']]
+    for finger_name, tip_name, mcp_name in [
+        ('thumb', 'thumb_tip', 'thumb_mcp'),
+        ('index', 'index_tip', 'index_mcp'),
+        ('middle', 'middle_tip', 'middle_mcp'),
+        ('ring', 'ring_tip', 'ring_mcp'),
+        ('pinky', 'pinky_tip', 'pinky_mcp'),
+    ]:
+        tip_pt = sample[HAND_JOINTS[tip_name]]
+        mcp_pt = sample[HAND_JOINTS[mcp_name]]
+        d_tip = _euclidean_distance(wrist_pt, tip_pt)
+        d_mcp = _euclidean_distance(wrist_pt, mcp_pt)
+        features[f'ratio_ext_{finger_name}'] = float(d_tip / (d_mcp + 1e-6))
 
     angle_triplets = [
         ('wrist', 'index_mcp', 'index_tip'),
@@ -96,6 +125,11 @@ def _compute_sample_features(sample: np.ndarray) -> dict[str, float]:
         ('middle_mcp', 'middle_pip', 'middle_tip'),
         ('ring_mcp', 'ring_pip', 'ring_tip'),
         ('pinky_mcp', 'pinky_pip', 'pinky_tip'),
+        ('thumb_mcp', 'thumb_ip', 'thumb_tip'),
+        ('index_pip', 'index_dip', 'index_tip'),
+        ('middle_pip', 'middle_dip', 'middle_tip'),
+        ('ring_pip', 'ring_dip', 'ring_tip'),
+        ('pinky_pip', 'pinky_dip', 'pinky_tip'),
     ]
 
     for name_a, name_b, name_c in angle_triplets:
@@ -103,6 +137,17 @@ def _compute_sample_features(sample: np.ndarray) -> dict[str, float]:
         idx_b = HAND_JOINTS[name_b]
         idx_c = HAND_JOINTS[name_c]
         features[f'angle_{name_a}_{name_b}_{name_c}'] = _angle_between(sample[idx_a], sample[idx_b], sample[idx_c])
+
+    # 3D Palm normal orientation vector
+    v1 = sample[HAND_JOINTS['index_mcp']] - wrist_pt
+    v2 = sample[HAND_JOINTS['pinky_mcp']] - wrist_pt
+    normal = np.cross(v1, v2)
+    norm_len = float(np.linalg.norm(normal))
+    if norm_len > 1e-6:
+        normal /= norm_len
+    features['palm_normal_x'] = float(normal[0])
+    features['palm_normal_y'] = float(normal[1])
+    features['palm_normal_z'] = float(normal[2])
 
     return features
 

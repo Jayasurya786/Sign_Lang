@@ -34,7 +34,12 @@
     </div>
 
     <div class="output-card">
-      <video class="preview" id="preview" autoplay playsinline muted></video>
+      <div style="position: relative; width: 100%; border-radius: 14px; overflow: hidden; background: #0f172a;">
+        <video class="preview" id="preview" autoplay playsinline muted style="width: 100%; height: auto; display: block;"></video>
+        <canvas id="skeleton-canvas" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none;"></canvas>
+        <div id="gesture-badge" style="position: absolute; top: 14px; left: 14px; padding: 6px 12px; border-radius: 8px; background: rgba(15, 23, 42, 0.85); color: #38bdf8; font-size: 13px; font-weight: 600; border: 1px solid rgba(56, 189, 248, 0.3); backdrop-filter: blur(4px); display: none;">Live Skeletal Tracking</div>
+      </div>
+
       <div class="stats">
         <div class="stat">
           <span class="stat-label">Prediction</span>
@@ -53,11 +58,34 @@
           <span class="stat-value" id="model-status">Idle</span>
         </div>
       </div>
+
+      <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; align-items: center; justify-content: space-between;">
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <button class="secondary" id="speak-btn" title="Speak sentence aloud" style="padding: 8px 14px; font-size: 13px;">
+            🔊 Speak
+          </button>
+          <button class="secondary" id="space-btn" title="Add space between words" style="padding: 8px 14px; font-size: 13px;">
+            ␣ Space
+          </button>
+          <button class="secondary" id="backspace-btn" title="Delete last letter" style="padding: 8px 14px; font-size: 13px;">
+            ⌫ Backspace
+          </button>
+          <button class="secondary" id="clear-btn" title="Clear current sentence" style="padding: 8px 14px; font-size: 13px;">
+            🗑 Clear
+          </button>
+        </div>
+        <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: #94a3b8; cursor: pointer;">
+          <input type="checkbox" id="auto-tts-toggle" checked style="accent-color: #38bdf8;" />
+          Auto-Speak Words
+        </label>
+      </div>
     </div>
   </section>
 
   <script>
     const preview = document.getElementById('preview');
+    const skeletonCanvas = document.getElementById('skeleton-canvas');
+    const gestureBadge = document.getElementById('gesture-badge');
     const predictionValue = document.getElementById('prediction-value');
     const sentenceValue = document.getElementById('sentence-value');
     const confidenceValue = document.getElementById('confidence-value');
@@ -65,6 +93,12 @@
     const trainBtn = document.getElementById('train-btn');
     const predictBtn = document.getElementById('predict-btn');
     const refreshDatasetBtn = document.getElementById('refresh-dataset-btn');
+
+    const speakBtn = document.getElementById('speak-btn');
+    const spaceBtn = document.getElementById('space-btn');
+    const backspaceBtn = document.getElementById('backspace-btn');
+    const clearBtn = document.getElementById('clear-btn');
+    const autoTtsToggle = document.getElementById('auto-tts-toggle');
 
     let streamActive = false;
     let currentStream = null;
@@ -74,9 +108,98 @@
     let candidateLabel = '';
     let candidateCount = 0;
     let recentPredictions = [];
+    let currentWord = '';
+    let completedSentence = '';
+    let lastSignalAt = 0;
+
+    // Hand skeleton connections for MediaPipe 21 landmarks
+    const SKELETON_CONNECTIONS = [
+      [0, 1], [1, 2], [2, 3], [3, 4],        // Thumb
+      [0, 5], [5, 6], [6, 7], [7, 8],        // Index
+      [0, 9], [9, 10], [10, 11], [11, 12],   // Middle
+      [0, 13], [13, 14], [14, 15], [15, 16], // Ring
+      [0, 17], [17, 18], [18, 19], [19, 20], // Pinky
+      [5, 9], [9, 13], [13, 17]              // Palm Knuckles
+    ];
+
+    function speakText(text) {
+      if (!text || !('speechSynthesis' in window)) return;
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+      window.speechSynthesis.speak(utterance);
+    }
+
+    function drawHandSkeleton(rawHands) {
+      if (!skeletonCanvas || !preview.videoWidth || !preview.videoHeight) return;
+
+      if (skeletonCanvas.width !== preview.videoWidth || skeletonCanvas.height !== preview.videoHeight) {
+        skeletonCanvas.width = preview.videoWidth;
+        skeletonCanvas.height = preview.videoHeight;
+      }
+
+      const ctx = skeletonCanvas.getContext('2d');
+      ctx.clearRect(0, 0, skeletonCanvas.width, skeletonCanvas.height);
+
+      if (!rawHands || rawHands.length === 0) {
+        gestureBadge.style.display = 'none';
+        return;
+      }
+
+      gestureBadge.style.display = 'block';
+      gestureBadge.textContent = rawHands.length === 1 ? 'Tracking: 1 Hand' : 'Tracking: 2 Hands';
+
+      rawHands.forEach((handPoints, handIdx) => {
+        const strokeColor = handIdx === 0 ? '#38bdf8' : '#34d399';
+        const jointColor = handIdx === 0 ? '#0284c7' : '#059669';
+        const tipColor = '#f43f5e';
+
+        // Draw bone lines
+        ctx.strokeStyle = strokeColor;
+        ctx.lineWidth = 3.5;
+        ctx.lineCap = 'round';
+
+        SKELETON_CONNECTIONS.forEach(([startIdx, endIdx]) => {
+          const ptA = handPoints[startIdx];
+          const ptB = handPoints[endIdx];
+          if (ptA && ptB) {
+            ctx.beginPath();
+            ctx.moveTo(ptA[0] * skeletonCanvas.width, ptA[1] * skeletonCanvas.height);
+            ctx.lineTo(ptB[0] * skeletonCanvas.width, ptB[1] * skeletonCanvas.height);
+            ctx.stroke();
+          }
+        });
+
+        // Draw joints
+        handPoints.forEach((pt, idx) => {
+          const x = pt[0] * skeletonCanvas.width;
+          const y = pt[1] * skeletonCanvas.height;
+          const isFingertip = [4, 8, 12, 16, 20].includes(idx);
+
+          ctx.beginPath();
+          ctx.arc(x, y, isFingertip ? 5.5 : 4, 0, 2 * Math.PI);
+          ctx.fillStyle = isFingertip ? tipColor : jointColor;
+          ctx.fill();
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        });
+      });
+    }
 
     function setStatusMessage(message) {
       modelStatus.textContent = message;
+    }
+
+    function finalizeCurrentWord() {
+      if (!currentWord) return;
+      if (autoTtsToggle.checked) {
+        speakText(currentWord);
+      }
+      completedSentence = completedSentence ? `${completedSentence} ${currentWord}` : currentWord;
+      currentWord = '';
+      sentenceValue.textContent = completedSentence;
     }
 
     async function trainModel() {
@@ -113,18 +236,33 @@
       try {
         const res = await fetch('/api/dataset-stats');
         const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.message || 'Dataset stats unavailable');
-        }
+        if (!res.ok) throw new Error(data.message || 'Dataset stats unavailable');
         console.log('Dataset stats refreshed', data);
       } catch (error) {
         console.error(error);
       }
     }
 
-    function updatePreviewText(label) {
+    function updatePreviewText(label, controlAction) {
       const cleanLabel = String(label || '').trim().toUpperCase();
+      const now = Date.now();
+
+      // Check for control gestures
+      if (controlAction === 'OPEN_PALM') {
+        if (currentWord) {
+          gestureBadge.textContent = 'Action: [SPACE]';
+          finalizeCurrentWord();
+        }
+        return;
+      } else if (controlAction === 'TWO_HANDS') {
+        gestureBadge.textContent = 'Action: Two Hands Detected';
+      }
+
       if (!cleanLabel || cleanLabel === 'UNKNOWN') {
+        if (now - lastSignalAt > 2200) {
+          finalizeCurrentWord();
+          sentenceValue.textContent = completedSentence || '--';
+        }
         predictionValue.textContent = 'Unknown';
         confidenceValue.textContent = '0.0%';
         candidateLabel = '';
@@ -132,19 +270,21 @@
         return;
       }
 
+      lastSignalAt = now;
       recentPredictions.push(cleanLabel);
-      if (recentPredictions.length > 5) {
-        recentPredictions.shift();
-      }
+      if (recentPredictions.length > 5) recentPredictions.shift();
+
       const votes = recentPredictions.reduce((counts, value) => {
         counts[value] = (counts[value] || 0) + 1;
         return counts;
       }, {});
       const stableLabel = Object.entries(votes).sort((left, right) => right[1] - left[1])[0];
+
       if (!stableLabel || stableLabel[1] < 2) {
         predictionValue.textContent = 'Analysing...';
         return;
       }
+
       const votedLabel = stableLabel[0];
 
       if (candidateLabel === votedLabel) {
@@ -153,32 +293,30 @@
         candidateLabel = votedLabel;
         candidateCount = 1;
       }
+
       if (candidateCount < 2) {
         predictionValue.textContent = 'Analysing...';
         return;
       }
 
-      const now = Date.now();
-      if (letterWindow.length && now - lastPredictionAt > 2200) {
-        letterWindow = [];
+      if (now - lastPredictionAt > 2200 && currentWord) {
+        finalizeCurrentWord();
       }
       lastPredictionAt = now;
 
-      if (letterWindow.length && letterWindow[letterWindow.length - 1] === cleanLabel) {
-        const word = letterWindow.join('');
-        predictionValue.textContent = word;
-        sentenceValue.textContent = word;
+      if (currentWord && currentWord.slice(-1) === votedLabel) {
+        predictionValue.textContent = currentWord;
+        sentenceValue.textContent = completedSentence ? `${completedSentence} ${currentWord}` : currentWord;
         return;
       }
 
-      letterWindow.push(cleanLabel);
-      if (letterWindow.length > 20) {
-        letterWindow = letterWindow.slice(-20);
+      currentWord += votedLabel;
+      if (currentWord.length > 12) {
+        currentWord = currentWord.slice(-12);
       }
 
-      const word = letterWindow.join('');
-      predictionValue.textContent = word;
-      sentenceValue.textContent = word;
+      predictionValue.textContent = currentWord;
+      sentenceValue.textContent = completedSentence ? `${completedSentence} ${currentWord}` : currentWord;
     }
 
     function stopCamera() {
@@ -190,14 +328,22 @@
         currentStream.getTracks().forEach((track) => track.stop());
         currentStream = null;
       }
-      if (preview) {
-        preview.srcObject = null;
+      if (preview) preview.srcObject = null;
+      if (skeletonCanvas) {
+        const ctx = skeletonCanvas.getContext('2d');
+        ctx.clearRect(0, 0, skeletonCanvas.width, skeletonCanvas.height);
       }
+      if (gestureBadge) gestureBadge.style.display = 'none';
+
       streamActive = false;
       letterWindow = [];
       candidateLabel = '';
       candidateCount = 0;
       recentPredictions = [];
+      currentWord = '';
+      completedSentence = '';
+      lastSignalAt = 0;
+      lastPredictionAt = 0;
       sentenceValue.textContent = '--';
       setStatusMessage('Idle');
     }
@@ -218,7 +364,7 @@
           audio: false,
         });
       } catch (error) {
-        throw new Error('Camera access was blocked or unavailable. Please allow camera permissions and try again.');
+        throw new Error('Camera access was blocked or unavailable.');
       }
 
       currentStream = stream;
@@ -229,24 +375,18 @@
 
       predictionTimer = setInterval(async () => {
         try {
-          if (!preview || !preview.videoWidth || !preview.videoHeight) {
-            return;
-          }
+          if (!preview || !preview.videoWidth || !preview.videoHeight) return;
 
           const canvas = document.createElement('canvas');
           canvas.width = preview.videoWidth;
           canvas.height = preview.videoHeight;
           const ctx = canvas.getContext('2d');
-          if (!ctx) {
-            throw new Error('The browser could not access the canvas context.');
-          }
+          if (!ctx) return;
 
           ctx.drawImage(preview, 0, 0, canvas.width, canvas.height);
-          const image = canvas.toDataURL('image/jpeg', 0.9);
+          const image = canvas.toDataURL('image/jpeg', 0.85);
 
-          if (!isValidDataUrl(image)) {
-            throw new Error('Captured frame is not a valid image payload.');
-          }
+          if (!isValidDataUrl(image)) return;
 
           const res = await fetch('/api/predict', {
             method: 'POST',
@@ -255,29 +395,25 @@
           });
 
           const data = await res.json();
-          if (!res.ok) {
-            console.warn('Prediction request failed:', data.message || 'unknown');
+          if (!res.ok || data.status !== 'success') {
             updatePreviewText('unknown');
+            drawHandSkeleton([]);
             return;
           }
 
-          if (data.status !== 'success') {
-            console.warn('Prediction status was not success:', data);
-            return;
-          }
+          // Draw live skeleton
+          drawHandSkeleton(data.landmarks || []);
 
           const displayLabel = data.label || 'Unknown';
-          updatePreviewText(displayLabel);
+          updatePreviewText(displayLabel, data.control_action);
           confidenceValue.textContent = `${(Number(data.confidence || 0) * 100).toFixed(1)}%`;
           setStatusMessage(data.is_unknown ? 'Hold sign steady' : 'Live');
         } catch (error) {
-          console.error(error);
-          predictionValue.textContent = '--';
-          sentenceValue.textContent = '--';
-          confidenceValue.textContent = '--';
-          setStatusMessage('Camera blocked');
+          console.error('Prediction loop error:', error);
+          drawHandSkeleton([]);
+          setStatusMessage('Processing frame...');
         }
-      }, 1500);
+      }, 1000);
     }
 
     const UNKNOWN_THRESHOLD = 0.03;
@@ -291,16 +427,42 @@
         confidenceValue.textContent = '--';
         return;
       }
-
       try {
         await startCamera();
       } catch (error) {
         stopCamera();
         setStatusMessage('Error');
-        predictionValue.textContent = '--';
-        confidenceValue.textContent = '--';
         console.error(error);
       }
     });
+
+    // Control buttons
+    speakBtn.addEventListener('click', () => {
+      const full = completedSentence ? (currentWord ? `${completedSentence} ${currentWord}` : completedSentence) : currentWord;
+      if (full) speakText(full);
+    });
+
+    spaceBtn.addEventListener('click', finalizeCurrentWord);
+
+    backspaceBtn.addEventListener('click', () => {
+      if (currentWord) {
+        currentWord = currentWord.slice(0, -1);
+        predictionValue.textContent = currentWord || '--';
+      } else if (completedSentence) {
+        completedSentence = completedSentence.slice(0, -1).trim();
+        sentenceValue.textContent = completedSentence || '--';
+      }
+    });
+
+    clearBtn.addEventListener('click', async () => {
+      currentWord = '';
+      completedSentence = '';
+      predictionValue.textContent = '--';
+      sentenceValue.textContent = '--';
+      try {
+        await fetch('/api/clear-buffer', { method: 'POST' });
+      } catch (e) {}
+    });
   </script>
 {% endblock %}
+

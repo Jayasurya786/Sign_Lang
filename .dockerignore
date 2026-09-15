@@ -1,0 +1,38 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Git & IDEs
+.git/
+.gitignore
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Heavy datasets (raw images and temporary downloads)
+archive/
+archive (1)/
+data/online_asl/
+data/processed/
+
+# Do NOT ignore models needed for inference
+!src/models/sign_bilstm.keras
+!src/models/sign_bilstm.tflite
+!src/models/model_classes.json
+!src/models/model_quality.json
+
+# Logs & temp files
+*.log
+scratch/

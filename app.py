@@ -4,6 +4,7 @@ import base64
 import io
 import json
 import os
+import time
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +25,7 @@ from src.models.evaluation import (build_confusion_matrix_report,
                                   compute_per_class_metrics,
                                   rank_class_difficulty,
                                   summarize_most_confused_pairs)
+from src.processing.augmentation import augment_landmarks
 from src.processing.cleaning import clean_landmark_dataset
 from src.processing.features import build_feature_dataset
 from src.processing.sequences import create_fixed_length_sequences
@@ -34,7 +36,7 @@ MODEL_PATH = Path('src/models/sign_bilstm.keras')
 MODEL_METRICS_PATH = Path('src/models/model_quality.json')
 MODEL_CLASSES_PATH = Path('src/models/model_classes.json')
 ONLINE_IMAGE_DATASET = Path('data/online_asl')
-LANDMARK_CACHE_VERSION = 'v2-relative-scale'
+LANDMARK_CACHE_VERSION = 'v3-augmented-scale'
 DATASET_CANDIDATES = [
     Path(os.environ.get('SIGN_LANG_DATASET_PATH', '')).expanduser() if os.environ.get('SIGN_LANG_DATASET_PATH') else None,
     ONLINE_IMAGE_DATASET,
@@ -42,6 +44,12 @@ DATASET_CANDIDATES = [
 DEFAULT_UNKNOWN_THRESHOLD = 0.03
 LIVE_FEATURE_WINDOW = deque(maxlen=30)
 TRAINING_STATE = {'status': 'idle', 'message': 'Ready', 'dataset_source': ''}
+
+
+def build_live_sequence(feature_row: np.ndarray, sequence_length: int = 30) -> np.ndarray:
+    """Build the static-pose sequence shape used by the trained classifier."""
+    row = np.asarray(feature_row, dtype=np.float32).reshape(1, -1)
+    return np.repeat(row, sequence_length, axis=0).reshape(1, sequence_length, -1)
 
 
 def resolve_training_dataset() -> Path:
@@ -154,6 +162,78 @@ def build_prediction_preview(predictions: list[str] | tuple[str, ...] | None) ->
         'sentence': sentence,
         'preview': sentence,
     }
+
+
+LIVE_SENTENCE_BUFFER: list[str] = []
+LIVE_SENTENCE_BUFFER_TS = 0
+LIVE_WORD_SMOOTHING: dict[str, list[float]] = {}
+
+
+def update_prediction_buffer(label: str | None, now_ms: int | None = None, inactivity_ms: int = 2200) -> str:
+    """Accumulate a sentence over successive predictions while preventing repeated duplicates."""
+    global LIVE_SENTENCE_BUFFER, LIVE_SENTENCE_BUFFER_TS
+
+    if now_ms is None:
+        now_ms = int(time.time() * 1000)
+
+    normalized = str(label or '').strip().upper()
+    if not normalized or normalized in {'UNKNOWN', 'NONE', 'NAN'}:
+        if LIVE_SENTENCE_BUFFER and (now_ms - LIVE_SENTENCE_BUFFER_TS) > inactivity_ms:
+            LIVE_SENTENCE_BUFFER.clear()
+        return ''.join(LIVE_SENTENCE_BUFFER)
+
+    if LIVE_SENTENCE_BUFFER and (now_ms - LIVE_SENTENCE_BUFFER_TS) > inactivity_ms:
+        LIVE_SENTENCE_BUFFER.clear()
+
+    if LIVE_SENTENCE_BUFFER and LIVE_SENTENCE_BUFFER[-1] == normalized:
+        LIVE_SENTENCE_BUFFER_TS = now_ms
+        return ''.join(LIVE_SENTENCE_BUFFER)
+
+    LIVE_SENTENCE_BUFFER.append(normalized)
+    if len(LIVE_SENTENCE_BUFFER) > 30:
+        LIVE_SENTENCE_BUFFER = LIVE_SENTENCE_BUFFER[-30:]
+    LIVE_SENTENCE_BUFFER_TS = now_ms
+    return ''.join(LIVE_SENTENCE_BUFFER)
+
+
+def smooth_and_commit_prediction(label: str | None, confidence: float | None = None, now_ms: int | None = None, inactivity_ms: int = 2200) -> dict:
+    """Smooth noisy predictions into a stable word, then commit to the sentence buffer."""
+    global LIVE_SENTENCE_BUFFER_TS, LIVE_WORD_SMOOTHING
+
+    if now_ms is None:
+        now_ms = int(time.time() * 1000)
+
+    normalized = str(label or '').strip().upper()
+    if not normalized or normalized in {'UNKNOWN', 'NONE', 'NAN'}:
+        current = ''.join(LIVE_SENTENCE_BUFFER)
+        if current and (now_ms - LIVE_SENTENCE_BUFFER_TS) > inactivity_ms:
+            LIVE_SENTENCE_BUFFER.clear()
+            LIVE_SENTENCE_BUFFER_TS = now_ms
+        return {'word': ''.join(LIVE_SENTENCE_BUFFER), 'sentence': ''.join(LIVE_SENTENCE_BUFFER), 'label': ''}
+
+    bucket = LIVE_WORD_SMOOTHING.setdefault(normalized, [])
+    bucket.append(float(confidence or 0.0))
+    if len(bucket) > 5:
+        bucket.pop(0)
+
+    if len(bucket) < 2:
+        current_word = ''.join(LIVE_SENTENCE_BUFFER)
+        return {'word': current_word, 'sentence': current_word, 'label': normalized}
+
+    average_confidence = float(np.mean(bucket)) if bucket else 0.0
+    if average_confidence < 0.5:
+        return {'word': ''.join(LIVE_SENTENCE_BUFFER), 'sentence': ''.join(LIVE_SENTENCE_BUFFER), 'label': normalized}
+
+    sentence = update_prediction_buffer(normalized, now_ms=now_ms, inactivity_ms=inactivity_ms)
+    LIVE_WORD_SMOOTHING.clear()
+    return {'word': sentence, 'sentence': sentence, 'label': normalized}
+
+
+def clear_prediction_buffer():
+    global LIVE_SENTENCE_BUFFER, LIVE_SENTENCE_BUFFER_TS, LIVE_WORD_SMOOTHING
+    LIVE_SENTENCE_BUFFER.clear()
+    LIVE_SENTENCE_BUFFER_TS = 0
+    LIVE_WORD_SMOOTHING.clear()
 
 
 def _build_model_quality_report(model, X, y, labels=None):
@@ -416,9 +496,11 @@ def api_train():
         normalized_df = train_df.copy()
         normalized_df['label'] = normalized_df['label'].map(lambda value: str(value).strip().upper())
 
-        TRAINING_STATE.update({'status': 'preparing', 'message': 'Preparing training features...'})
+        TRAINING_STATE.update({'status': 'preparing', 'message': 'Preparing training features with augmentation...'})
         cleaned = clean_landmark_dataset(normalized_df)
-        features = build_feature_dataset(cleaned)
+        augment_factor = int(os.environ.get('SIGN_LANG_AUGMENT_FACTOR', '1'))
+        augmented = augment_landmarks(cleaned, augment_factor=augment_factor, include_original=True) if augment_factor > 0 else cleaned
+        features = build_feature_dataset(augmented)
         X, y = create_fixed_length_sequences(features, sequence_length=30)
 
         if X.size == 0 or y.size == 0:
@@ -434,7 +516,7 @@ def api_train():
             sequence_length=30,
             feature_dim=X.shape[-1],
             model_path=str(MODEL_PATH),
-            epochs=int(os.environ.get('SIGN_LANG_TRAIN_EPOCHS', '20')),
+            epochs=int(os.environ.get('SIGN_LANG_TRAIN_EPOCHS', '25')),
             batch_size=int(os.environ.get('SIGN_LANG_TRAIN_BATCH_SIZE', '32')),
         )
         _save_model_classes(model_classes)
@@ -501,10 +583,11 @@ def api_predict():
                 'class_index': -1,
             })
 
-        extractor = LandmarkExtractor()
-        vector = extractor.extract_landmarks_from_frame(frame)
+        extractor = LandmarkExtractor(max_num_hands=2)
+        vector, raw_hands, num_hands = extractor.extract_landmarks_with_raw_points(frame)
         if vector is None:
             LIVE_FEATURE_WINDOW.clear()
+            clear_prediction_buffer()
             return jsonify({
                 'status': 'success',
                 'label': 'unknown',
@@ -515,6 +598,9 @@ def api_predict():
                 'is_unknown': True,
                 'threshold': unknown_threshold,
                 'class_index': -1,
+                'landmarks': [],
+                'num_hands': 0,
+                'control_action': '',
             })
 
         feature_df = pd.DataFrame(np.asarray(vector, dtype=float).reshape(1, -1))
@@ -522,10 +608,21 @@ def api_predict():
         feature_df = build_feature_dataset(feature_df)
         arr = feature_df.drop(columns=['label'], errors='ignore').to_numpy(dtype=np.float32)
         LIVE_FEATURE_WINDOW.append(arr[0])
-        sequence_rows = list(LIVE_FEATURE_WINDOW)
-        if len(sequence_rows) < 30:
-            sequence_rows = [sequence_rows[0]] * (30 - len(sequence_rows)) + sequence_rows
-        sequence = np.asarray(sequence_rows, dtype=np.float32).reshape(1, 30, -1)
+        sequence = build_live_sequence(arr[0], sequence_length=30)
+
+        # Detect two-handed signs or special control gestures
+        control_action = ''
+        if num_hands >= 2:
+            # Two hands detected - detect HELLO or CLEAR
+            control_action = 'TWO_HANDS'
+        elif 'ratio_ext_index' in feature_df.columns:
+            # Check if all 4 fingers are fully extended flat (open palm for space)
+            r_idx = feature_df['ratio_ext_index'].values[0]
+            r_mid = feature_df['ratio_ext_middle'].values[0]
+            r_rng = feature_df['ratio_ext_ring'].values[0]
+            r_pnk = feature_df['ratio_ext_pinky'].values[0]
+            if r_idx > 1.9 and r_mid > 1.9 and r_rng > 1.8 and r_pnk > 1.7:
+                control_action = 'OPEN_PALM'
 
         if not Path(model_path).exists():
             return jsonify({'status': 'error', 'message': 'Model file not found. Train the model first.'}), 404
@@ -536,17 +633,28 @@ def api_predict():
         if len(class_names) != preds.shape[1]:
             class_names = class_names[:preds.shape[1]] if len(class_names) > preds.shape[1] else [str(i) for i in range(preds.shape[1])]
         result = resolve_prediction_label(preds[0], class_names=class_names, threshold=unknown_threshold)
-        preview = build_prediction_preview([result['label']])
+        now_ms = int(time.time() * 1000)
+        sentence_info = smooth_and_commit_prediction(
+            result['label'],
+            confidence=result['confidence'],
+            now_ms=now_ms,
+            inactivity_ms=2200,
+        )
+        sentence = sentence_info['sentence']
+        preview = build_prediction_preview(list(sentence))
         return jsonify({
             'status': 'success',
             'label': result['label'],
-            'word': preview['word'],
-            'sentence': preview['sentence'],
+            'word': sentence,
+            'sentence': sentence,
             'preview': preview['preview'],
             'confidence': result['confidence'],
             'is_unknown': result['is_unknown'],
             'threshold': result['threshold'],
             'class_index': result['class_index'],
+            'landmarks': raw_hands,
+            'num_hands': num_hands,
+            'control_action': control_action,
         })
     except (ValueError, TypeError) as exc:  # pragma: no cover - runtime safeguard
         return jsonify({'status': 'error', 'message': f'Invalid image payload: {str(exc)}'}), 400
@@ -557,19 +665,57 @@ def api_predict():
 @app.route('/api/collect', methods=['POST'])
 def api_collect():
     payload = request.get_json(silent=True) or {}
-    label = (payload.get('label') or 'online').strip() or 'online'
+    image_b64 = payload.get('image')
+    label = (payload.get('label') or 'online').strip().upper()
 
-    try:
+    if not label or not label.isalnum() or len(label) > 16:
+        label = 'A'
+
+    if not image_b64:
+        target_dir = ONLINE_IMAGE_DATASET / label
+        existing = sum(1 for f in target_dir.glob('*.jpg')) if target_dir.exists() else 0
         return jsonify({
             'status': 'success',
-            'message': f'Online dataset source: {ONLINE_IMAGE_DATASET}. Use the Train model action after downloading it.',
+            'message': f'Online dataset target: {target_dir}',
             'source': str(ONLINE_IMAGE_DATASET),
             'label': label,
-            'samples': 0,
+            'samples': existing,
             'labels': 26,
+        })
+
+    try:
+        if not image_b64.startswith('data:image/') or ',' not in image_b64:
+            return jsonify({'status': 'error', 'message': 'Invalid image data payload.'}), 400
+
+        header, encoded = image_b64.split(',', 1)
+        img_data = base64.b64decode(encoded, validate=True)
+        image = np.asarray(bytearray(img_data), dtype=np.uint8)
+        frame = cv2.imdecode(image, cv2.IMREAD_COLOR)
+        if frame is None:
+            return jsonify({'status': 'error', 'message': 'Could not decode image frame.'}), 400
+
+        target_dir = ONLINE_IMAGE_DATASET / label
+        target_dir.mkdir(parents=True, exist_ok=True)
+        existing_count = sum(1 for f in target_dir.glob('*.jpg'))
+        img_filename = target_dir / f'{existing_count + 1:05d}.jpg'
+        cv2.imwrite(str(img_filename), frame)
+
+        return jsonify({
+            'status': 'success',
+            'message': f'Saved sample {existing_count + 1} for class {label}.',
+            'label': label,
+            'sample_index': existing_count + 1,
+            'total_class_samples': existing_count + 1,
         })
     except Exception as exc:  # pragma: no cover - runtime safeguard
         return jsonify({'status': 'error', 'message': str(exc)}), 500
+
+
+@app.route('/api/clear-buffer', methods=['POST'])
+def api_clear_buffer():
+    clear_prediction_buffer()
+    LIVE_FEATURE_WINDOW.clear()
+    return jsonify({'status': 'success', 'message': 'Prediction buffer cleared.'})
 
 
 if __name__ == '__main__':

@@ -19,29 +19,61 @@ class BiLSTMClassifier:
 
     def _build_model(self) -> keras.Model:
         inputs = keras.Input(shape=(self.sequence_length, self.feature_dim))
-        x = keras.layers.Bidirectional(keras.layers.LSTM(64, return_sequences=True))(inputs)
-        x = keras.layers.Dropout(0.2)(x)
-        x = keras.layers.Bidirectional(keras.layers.LSTM(32))(x)
-        x = keras.layers.Dropout(0.2)(x)
+        x = keras.layers.Bidirectional(keras.layers.LSTM(96, return_sequences=True))(inputs)
+        x = keras.layers.LayerNormalization()(x)
+        x = keras.layers.Dropout(0.25)(x)
+        x = keras.layers.Bidirectional(keras.layers.LSTM(64))(x)
+        x = keras.layers.LayerNormalization()(x)
+        x = keras.layers.Dense(128, activation='relu')(x)
+        x = keras.layers.BatchNormalization()(x)
+        x = keras.layers.Dropout(0.25)(x)
+        x = keras.layers.Dense(64, activation='relu')(x)
         outputs = keras.layers.Dense(self.num_classes, activation='softmax')(x)
         return keras.Model(inputs=inputs, outputs=outputs)
 
     def compile(self) -> None:
         self.model.compile(
-            optimizer='adam',
+            optimizer=keras.optimizers.Adam(learning_rate=1e-3),
             loss='sparse_categorical_crossentropy',
             metrics=['accuracy'],
         )
 
-    def train(self, X_train: np.ndarray, y_train: np.ndarray, validation_split: float = 0.1, epochs: int = 20, batch_size: int = 32):
+    def train(
+        self,
+        X_train: np.ndarray,
+        y_train: np.ndarray,
+        validation_split: float = 0.1,
+        epochs: int = 25,
+        batch_size: int = 32,
+        callbacks: list | None = None,
+    ):
         self.compile()
         permutation = np.random.default_rng(42).permutation(len(X_train))
+
+        if callbacks is None:
+            callbacks = [
+                keras.callbacks.EarlyStopping(
+                    monitor='val_loss' if validation_split > 0 else 'loss',
+                    patience=7,
+                    restore_best_weights=True,
+                    verbose=1,
+                ),
+                keras.callbacks.ReduceLROnPlateau(
+                    monitor='val_loss' if validation_split > 0 else 'loss',
+                    factor=0.5,
+                    patience=3,
+                    min_lr=1e-5,
+                    verbose=1,
+                ),
+            ]
+
         return self.model.fit(
             X_train[permutation],
             y_train[permutation],
             validation_split=validation_split,
             epochs=epochs,
             batch_size=batch_size,
+            callbacks=callbacks,
             verbose=1,
         )
 
@@ -101,9 +133,10 @@ def train_bilstm_model(
     sequence_length: int,
     feature_dim: int,
     model_path: str = 'models/sign_bilstm.keras',
-    epochs: int = 20,
+    epochs: int = 25,
     batch_size: int = 32,
     validation_split: float = 0.1,
+    callbacks: list | None = None,
 ) -> tuple[keras.Model, tf.keras.callbacks.History]:
     model = BiLSTMClassifier(num_classes=num_classes, sequence_length=sequence_length, feature_dim=feature_dim)
     history = model.train(
@@ -112,6 +145,7 @@ def train_bilstm_model(
         validation_split=validation_split,
         epochs=epochs,
         batch_size=batch_size,
+        callbacks=callbacks,
     )
     model.save(model_path)
     return model.model, history
@@ -122,7 +156,7 @@ def train_bilstm_from_csv(
     model_path: str = 'models/sign_bilstm.keras',
     sequence_length: int = 30,
     label_col: str = 'label',
-    epochs: int = 20,
+    epochs: int = 25,
     batch_size: int = 32,
 ) -> tuple[keras.Model, tf.keras.callbacks.History, list[str]]:
     df = pd.read_csv(input_csv)

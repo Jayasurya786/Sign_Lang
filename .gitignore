@@ -27,12 +27,13 @@ data/online_asl/
 data/processed/
 *.log
 
-# Trained model files and reports
-src/models/*.keras
-src/models/*.json
+# Trained model files and reports (track production model artifacts, ignore ad-hoc checkpoints)
 src/models/*.h5
-src/models/*.tflite
-src/models/model_quality.json
+src/models/checkpoint_*.keras
+!src/models/sign_bilstm.keras
+!src/models/sign_bilstm.tflite
+!src/models/model_classes.json
+!src/models/model_quality.json
 
 # Test coverage / notebooks output
 .coverage

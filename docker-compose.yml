@@ -1,0 +1,15 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sign_language_app
+    ports:
+      - "5000:5000"
+    environment:
+      - PORT=5000
+      - PYTHONUNBUFFERED=1
+    volumes:
+      # Mount dataset directory so samples recorded in-browser persist on the host
+      - ./data/online_asl:/app/data/online_asl
+    restart: unless-stopped
