@@ -20,6 +20,12 @@ A complete, high-accuracy, production-ready American Sign Language (ASL) alphabe
 - [Architecture & Processing Pipeline](#-architecture--processing-pipeline)
 - [Biomechanical Feature Engineering](#-biomechanical-feature-engineering)
 - [Data Augmentation Engine](#-data-augmentation-engine)
+- [⚡ Dataset Generation: Complete Creation & Synthesis Pipeline](#-dataset-generation-complete-creation--synthesis-pipeline)
+  - [Stage 1: Raw Image Generation (Webcam Burst Capture & In-Browser Studio)](#stage-1-raw-image-generation-webcam-burst-capture--in-browser-studio)
+  - [Stage 2: Landmark Matrix Generation (MediaPipe 21 Hand Joints)](#stage-2-landmark-matrix-generation-mediapipe-21-hand-joints)
+  - [Stage 3: High-Dimensional Feature Generation (100+ Spatial Descriptors)](#stage-3-high-dimensional-feature-generation-100-spatial-descriptors)
+  - [Stage 4: Synthetic Dataset Generation via Augmentation (2x Scaling)](#stage-4-synthetic-dataset-generation-via-augmentation-2x-scaling)
+  - [Stage 5: BiLSTM Temporal Sequence Tensor Generation](#stage-5-bilstm-temporal-sequence-tensor-generation)
 - [Deep Learning Model Architecture](#-deep-learning-model-architecture)
 - [Model Performance & Evaluation Benchmarks](#-model-performance--evaluation-benchmarks)
 - [Supported ASL Alphabet Signs](#-supported-asl-alphabet-signs)
@@ -172,6 +178,94 @@ To prevent overfitting and ensure real-world robustness, [`src/processing/augmen
    $$\mathbf{P}' = s \cdot \mathbf{P} \quad \text{where } s \sim \mathcal{U}(0.92, 1.08)$$
 4. **Gaussian Sensor Noise**:
    $$\mathbf{P}' = \mathbf{P} + \boldsymbol{\epsilon}, \quad \boldsymbol{\epsilon} \sim \mathcal{N}(0, 0.005^2)$$
+
+---
+
+## ⚡ Dataset Generation: Complete Creation & Synthesis Pipeline
+
+This project employs a multi-tiered **Dataset Generation Architecture** that spans physical image capture, landmark coordinate extraction, invariant feature transformations, synthetic dataset expansion, and temporal sequence tensor generation.
+
+```mermaid
+flowchart TD
+    subgraph "Tier 1: Physical Data Ingestion & Collection"
+        A1["Hugging Face Datasets<br/>(Marxulia v02 & v03)"] -->|download_hf_asl.py| B1["Raw Image Folders<br/>(data/online_asl/A..Z)"]
+        A2["Webcam Video Stream<br/>(HTML5 / getUserMedia)"] -->|/dataset Studio Burst Capture| B1
+    end
+
+    subgraph "Tier 2: Landmark Extraction"
+        B1 -->|build_combined_dataset.py<br/>MediaPipe Hands (static_image_mode=True)| C1["63 Landmark Coordinates<br/>(f0 .. f62)"]
+        C2["Historical Archive CSV<br/>(archive_image_landmarks.csv)"] --> C1
+        C1 -->|Deduplication & Cache Tagging| D1["online_asl_landmarks.csv<br/>(8,749 Samples)"]
+    end
+
+    subgraph "Tier 3: Feature Engineering & Transformation"
+        D1 -->|src/processing/features.py| E1["85 Discriminative Features<br/>(Ratios, Distances, Palm Normal)"]
+    end
+
+    subgraph "Tier 4: Synthetic Data Generation (2x Scaling)"
+        E1 -->|src/processing/augmentation.py<br/>Mirroring, Rotation, Scale, Jitter| F1["17,498 Augmented Sequences"]
+    end
+
+    subgraph "Tier 5: Temporal Sequence Tensor Generation"
+        F1 -->|src/processing/sequences.py<br/>30-Timestep Windowing| G1["Tensor Tensors<br/>X: (17498, 30, 85), y: (17498, 26)"]
+    end
+```
+
+### Stage 1: Raw Image Generation (Webcam Burst Capture & In-Browser Studio)
+- **Client-Side Generation Mechanism**:
+  - In `templates/dataset.html`, the user selects an ASL target letter ($A$ through $Z$) and clicks **Start Recording**.
+  - A high-frequency JavaScript timer captures a continuous burst of **20 frames** from the webcam at 150ms intervals.
+  - Each frame is drawn to an off-screen HTML5 `<canvas>`, rendered as a JPEG data URL (`data:image/jpeg;base64,...`), and posted to `/api/collect`.
+- **Server-Side Storage Engine (`/api/collect` in `app.py`)**:
+  - Validates base64 data URL formatting and decodes the image using OpenCV (`cv2.imdecode`).
+  - Scans `data/online_asl/<label>/`, determines the current maximum sequence number $N$, and saves the frame as `data/online_asl/<label>/f'{N+1:05d}.jpg'` at 95% JPEG quality.
+  - Dynamically returns updated sample counts so the web UI updates its progress counter in real time.
+
+### Stage 2: Landmark Matrix Generation (MediaPipe 21 Hand Joints)
+- **Execution Script**: `python scripts/build_combined_dataset.py --input data/online_asl --max-per-class 350`
+- **Extraction Mechanics**:
+  - Uses `LandmarkExtractor(static_image_mode=True, min_detection_confidence=0.30)`.
+  - For each image, MediaPipe scans for hand presence and outputs 21 normalized 3D keypoints:
+    $$\mathbf{P}_i = (x_i, y_i, z_i) \quad \text{for } i \in [0, 20]$$
+  - Failed detections (blurry images or hands outside the camera field) are automatically discarded.
+  - The 21 joints are serialized into a 63-dimensional coordinate array:
+    $$\mathbf{f} = [x_0, y_0, z_0, x_1, y_1, z_1, \dots, x_{20}, y_{20}, z_{20}]$$
+- **Archive Ingestion & Synchronization**:
+  - Normalizes historical archive sign labels via `normalize_archive_label_name()` to resolve legacy label mismatches.
+  - Merges extracted landmarks with `archive_image_landmarks.csv` to produce `online_asl_landmarks.csv` (**8,749 validated rows**).
+  - Emits the cache tag `v3-augmented-scale` in `online_asl_landmarks.csv.meta.json`.
+
+### Stage 3: High-Dimensional Feature Generation (100+ Spatial Descriptors)
+- **Execution Module**: `src/processing/features.py` (`build_feature_dataset`)
+- Transforms raw $(x, y, z)$ coordinates into rotation-, scale-, and position-invariant geometric metrics:
+  1. **Wrist Normalization**: Translates coordinate origin to the wrist joint $\mathbf{P}_0 = (0, 0, 0)$.
+  2. **Bounding Box Scaling**: Divides coordinates by the maximum span of the palm knuckles.
+  3. **Finger Extension / Curl Ratios (5 Features)**: Calculates $\frac{\|\mathbf{P}_{\text{TIP}} - \mathbf{P}_{\text{WRIST}}\|}{\|\mathbf{P}_{\text{MCP}} - \mathbf{P}_{\text{WRIST}}\|}$ for thumb, index, middle, ring, and pinky.
+  4. **Thumb-to-Knuckle Distances (4 Features)**: Measures Euclidean distance from thumb tip to all 4 finger MCP joints, allowing the model to distinguish compact fist signs ($A, E, S, T, M, N$).
+  5. **Pairwise Inter-Fingertip Distances (10 Features)**: Evaluates spread vs. touching fingers for all 10 fingertip pairs.
+  6. **3D Palm Normal Vector (3 Features)**: Computes cross-product $\mathbf{n} = \frac{\mathbf{v}_1 \times \mathbf{v}_2}{\|\mathbf{v}_1 \times \mathbf{v}_2\|}$, encoding hand orientation in 3D space.
+- The output is an enriched tabular matrix with **85 numeric feature columns per sample**.
+
+### Stage 4: Synthetic Dataset Generation via Augmentation (2x Scaling: 8,749 $\to$ 17,498)
+- **Execution Module**: `src/processing/augmentation.py` (`augment_landmarks`)
+- To provide robust left- and right-hand support and eliminate sensor sensitivity, new synthetic samples are generated on the fly:
+  1. **Horizontal Mirroring Generator**: Inverts $X$-coordinates ($x' = -x$), effectively generating a synthetic left-handed sample for every right-handed sample.
+  2. **2D Rotation Generator**: Rotates coordinates in the image plane by a random angle $\theta \in [-12^\circ, +12^\circ]$:
+     $$x' = x\cos\theta - y\sin\theta, \quad y' = x\sin\theta + y\cos\theta$$
+  3. **Scale Jitter Generator**: Multiplies coordinates by a random scaling factor $s \sim \mathcal{U}(0.92, 1.08)$.
+  4. **Coordinate Noise Generator**: Adds Gaussian sensor jitter $\epsilon \sim \mathcal{N}(0, 0.005^2)$.
+- Combined with the original samples, this generates a massive, balanced training dataset of **17,498 sequences**.
+
+### Stage 5: BiLSTM Temporal Sequence Tensor Generation
+- **Execution Module**: `src/processing/sequences.py` (`create_fixed_length_sequences`) & `app.py` (`build_live_sequence`)
+- **Training Tensor Formulation**:
+  - The Bidirectional LSTM expects 3D sequence tensors of shape `(Batch, Sequence_Length=30, Features=85)`.
+  - Static sign samples are projected across a 30-timestep temporal window, simulating a continuous static hold:
+    $$\mathbf{S} = \operatorname{repeat}(\mathbf{f}_{\text{sample}}, \text{repeats}=30, \text{axis}=0) \in \mathbb{R}^{30 \times 85}$$
+  - Dynamic gestures ($J, Z$) slide a 30-frame temporal window across consecutive landmark extractions.
+  - Final generated training tensors:
+    - $\mathbf{X}_{\text{train}} \in \mathbb{R}^{17498 \times 30 \times 85}$
+    - $\mathbf{y}_{\text{train}} \in \mathbb{R}^{17498 \times 26}$ (one-hot or label-encoded)
 
 ---
 
@@ -490,7 +584,7 @@ docker run -d -p 80:5000 --restart always --name sign_app sign-lang-prod
 
 ---
 
-## 🗂️ Complete Dataset & Script Pipeline Guide
+## ️ Complete Dataset & Script Pipeline Guide
 
 The system includes an end-to-end data engineering, validation, landmark extraction, and model training pipeline located in the `scripts/` directory.
 
