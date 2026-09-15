@@ -35,7 +35,17 @@ A complete, high-accuracy, production-ready American Sign Language (ASL) alphabe
   - [Background Model Retraining](#6-background-model-retraining-from-ui)
 - [TensorFlow Lite (TFLite) Edge & Mobile Deployment](#-tensorflow-lite-tflite-edge--mobile-deployment)
 - [Cloud Deployment Guide (Render, Railway, GCP, AWS)](#-cloud-deployment-guide)
-- [CLI Scripts & Development Toolkit](#-cli-scripts--development-toolkit)
+- [🗂️ Complete Dataset & Script Pipeline Guide](#-complete-dataset--script-pipeline-guide)
+  - [1. Dataset Architecture & File Hierarchy](#1-dataset-architecture--file-hierarchy)
+  - [2. Dataset Schema & Metadata Caching](#2-dataset-schema--metadata-caching)
+  - [3. Script-by-Script Reference & CLI Arguments](#3-script-by-script-reference--cli-arguments)
+    - [download_hf_asl.py](#script-1-download_hf_aslpy--hugging-face-dataset-downloader)
+    - [check_dataset_balance.py](#script-2-check_dataset_balancepy--class-balance-auditor)
+    - [build_combined_dataset.py](#script-3-build_combined_datasetpy--landmark-extractor--merger)
+    - [train_model.py](#script-4-train_modelpy--bilstm-model-training-pipeline)
+    - [evaluate_all_classes.py](#script-5-evaluate_all_classespy--holdout-image-evaluator)
+    - [export_tflite.py](#script-6-export_tflitepy--tflite-exporter--parity-validator)
+  - [4. End-to-End Walkthrough: Retraining on Custom Data](#4-end-to-end-walkthrough-retraining-on-custom-data)
 - [Comprehensive REST API Specification](#-comprehensive-rest-api-specification)
 - [Automated Test Suite](#-automated-test-suite)
 - [Configuration & Environment Variables](#-configuration--environment-variables)
@@ -480,18 +490,253 @@ docker run -d -p 80:5000 --restart always --name sign_app sign-lang-prod
 
 ---
 
-## 🛠️ CLI Scripts & Development Toolkit
+## 🗂️ Complete Dataset & Script Pipeline Guide
 
-The `scripts/` directory provides command-line utilities for data engineering and evaluation:
+The system includes an end-to-end data engineering, validation, landmark extraction, and model training pipeline located in the `scripts/` directory.
 
-| Script | Command | Purpose |
+| Script | Command | Primary Function |
 | :--- | :--- | :--- |
-| **Download Dataset** | `python scripts/download_hf_asl.py` | Downloads online ASL datasets from Hugging Face into `data/online_asl/`. |
-| **Build Combined Dataset** | `python scripts/build_combined_dataset.py` | Extracts landmarks across all classes and generates clean processed CSVs. |
-| **Check Balance** | `python scripts/check_dataset_balance.py --min-per-class 300` | Analyzes class balance and identifies weak or missing sign classes. |
-| **Train BiLSTM** | `python scripts/train_model.py` | Trains the BiLSTM neural network and generates `model_quality.json`. |
-| **Evaluate All Classes** | `python scripts/evaluate_all_classes.py` | Evaluates holdout test images across all 26 classes with detailed report. |
-| **Export TFLite** | `python scripts/export_tflite.py` | Converts Keras model to `.tflite` format and validates numerical precision. |
+| **`download_hf_asl.py`** | `python scripts/download_hf_asl.py` | Ingests multi-source public datasets from Hugging Face into letter folders. |
+| **`check_dataset_balance.py`** | `python scripts/check_dataset_balance.py` | Audits class distribution, identifies missing/underfilled classes, initializes folders. |
+| **`build_combined_dataset.py`** | `python scripts/build_combined_dataset.py` | Extracts MediaPipe hand landmarks from raw images and writes processed CSVs with cache tags. |
+| **`train_model.py`** | `python scripts/train_model.py` | Computes 100+ geometric features, applies 4-way augmentation, and trains the BiLSTM model. |
+| **`evaluate_all_classes.py`** | `python scripts/evaluate_all_classes.py` | Evaluates holdout test images across all 26 classes, printing per-sign accuracy and confidence. |
+| **`export_tflite.py`** | `python scripts/export_tflite.py` | Converts Keras model to ultra-lightweight `.tflite` format and validates numerical parity. |
+
+---
+
+### 1. Dataset Architecture & File Hierarchy
+
+The dataset pipeline separates raw image files from processed landmark coordinates:
+
+```text
+data/
+├── online_asl/                           # Raw image dataset (organized by letter)
+│   ├── A/                                # Sign class subfolder
+│   │   ├── 00001.jpg                     # Sequential RGB JPEG images (quality 95)
+│   │   ├── 00002.jpg
+│   │   └── ... (~340 images)
+│   ├── B/
+│   │   └── ...
+│   └── ... Z/
+└── processed/                            # Extracted landmark matrices & caches
+    ├── online_asl_landmarks.csv          # Master training dataset (8,749 rows)
+    ├── online_asl_landmarks.csv.meta.json# Cache metadata file (tag: v3-augmented-scale)
+    └── archive_image_landmarks.csv       # Supplementary historical archive landmarks
+```
+
+---
+
+### 2. Dataset Schema & Metadata Caching
+
+#### Processed Landmark CSV Format (`online_asl_landmarks.csv`):
+Each row represents a single static hand pose:
+- **`label`**: Target ASL letter (`A` through `Z`).
+- **`f0` through `f62`**: 63 raw normalized landmark coordinate values corresponding to the 21 MediaPipe hand joints:
+  $$\mathbf{f} = [x_0, y_0, z_0, x_1, y_1, z_1, \dots, x_{20}, y_{20}, z_{20}]$$
+  - Joint index $0$: Wrist
+  - Joint indices $1 - 4$: Thumb (CMC, MCP, IP, Tip)
+  - Joint indices $5 - 8$: Index Finger (MCP, PIP, DIP, Tip)
+  - Joint indices $9 - 12$: Middle Finger (MCP, PIP, DIP, Tip)
+  - Joint indices $13 - 16$: Ring Finger (MCP, PIP, DIP, Tip)
+  - Joint indices $17 - 20$: Pinky Finger (MCP, PIP, DIP, Tip)
+
+#### Cache Metadata System (`.meta.json`):
+To prevent slow re-extractions of thousands of images upon server restarts, the system writes a metadata sidecar file:
+```json
+{
+  "version": "v3-augmented-scale",
+  "num_samples": 8749
+}
+```
+If `app.py` detects a valid cached CSV matching the current `CACHE_VERSION`, it loads the pre-computed landmarks instantly (sub-second startup).
+
+---
+
+### 3. Script-by-Script Reference & CLI Arguments
+
+#### Script 1: `download_hf_asl.py` — Hugging Face Dataset Downloader
+Downloads publicly hosted ASL datasets directly from the Hugging Face Hub, standardizes labels to uppercase `A`–`Z`, converts color spaces to RGB, and saves them sequentially.
+
+```bash
+python scripts/download_hf_asl.py [OPTIONS]
+```
+
+**Supported Arguments:**
+- `--output <dir>`: Destination folder for downloaded images (Default: `data/online_asl`).
+- `--datasets <id1> [id2 ...]`: Hugging Face dataset IDs to download (Default: `Marxulia/asl_sign_languages_alphabets_v03` and `Marxulia/asl_sign_languages_alphabets_v02`).
+- `--max-per-class <int>`: Cap the number of downloaded images per letter (`0` for unlimited).
+
+**Usage Examples:**
+```bash
+# Ingest full multi-source dataset into data/online_asl:
+python scripts/download_hf_asl.py
+
+# Ingest with a maximum cap of 250 images per class:
+python scripts/download_hf_asl.py --max-per-class 250
+
+# Download from a specific custom Hugging Face repository:
+python scripts/download_hf_asl.py --datasets Marxulia/asl_sign_languages_alphabets_v03 --output data/custom_asl
+```
+
+---
+
+#### Script 2: `check_dataset_balance.py` — Class Balance Auditor
+Audits your image directories to ensure every class from `A` to `Z` has sufficient samples for balanced neural network training.
+
+```bash
+python scripts/check_dataset_balance.py [OPTIONS]
+```
+
+**Supported Arguments:**
+- `--root <dir>`: Path to the dataset root directory (Default: `data/online_asl`).
+- `--min-per-class <int>`: Minimum recommended sample count per class (Default: `300`).
+- `--init`: Automatically creates any missing `A` through `Z` subdirectories.
+
+**Return Codes (CI/CD Ready):**
+- Returns `0` if all 26 classes meet or exceed the `--min-per-class` threshold.
+- Returns `1` if any class is missing or underfilled (ideal as a pre-commit or training pipeline gate).
+
+**Usage Examples:**
+```bash
+# Initialize missing A-Z class directories:
+python scripts/check_dataset_balance.py --root data/online_asl --init
+
+# Audit dataset balance with a 300-sample threshold:
+python scripts/check_dataset_balance.py --root data/online_asl --min-per-class 300
+```
+
+---
+
+#### Script 3: `build_combined_dataset.py` — Landmark Extractor & Merger
+Iterates through image directories, executes MediaPipe Hand Landmark extraction, merges new extractions with existing archive data, removes corrupted records, and updates the cache metadata.
+
+```bash
+python scripts/build_combined_dataset.py [OPTIONS]
+```
+
+**Supported Arguments:**
+- `--input <dir>`: Root image folder containing letter subdirectories (Default: `data/online_asl`).
+- `--archive-csv <path>`: Path to optional historical archive landmark CSV (Default: `data/processed/archive_image_landmarks.csv`).
+- `--output-csv <path>`: Destination CSV for merged landmarks (Default: `data/processed/online_asl_landmarks.csv`).
+- `--max-per-class <int>`: Maximum images to extract per class to ensure balance (`0` for all, Default: `320`).
+
+**How It Works:**
+1. Initializes `LandmarkExtractor(static_image_mode=True, min_detection_confidence=0.30)`.
+2. Reads images via OpenCV, filters unreadable or un-detectable hands.
+3. Packages 63 landmark coordinates into normalized row records.
+4. Normalizes historical archive labels using `normalize_archive_label_name()`.
+5. Merges, validates, writes CSV, and generates `.meta.json` with cache version `v3-augmented-scale`.
+
+**Usage Examples:**
+```bash
+# Build unified dataset with up to 350 samples per class:
+python scripts/build_combined_dataset.py --input data/online_asl --max-per-class 350
+
+# Extract from custom directory without merging historical archive:
+python scripts/build_combined_dataset.py --input data/custom_asl --archive-csv data/none.csv --output-csv data/processed/custom_landmarks.csv
+```
+
+---
+
+#### Script 4: `train_model.py` — BiLSTM Model Training Pipeline
+The complete, self-contained neural network training script.
+
+```bash
+python scripts/train_model.py
+```
+
+**Pipeline Execution Flow:**
+1. **Data Ingestion**: Loads `data/processed/online_asl_landmarks.csv` (8,749 samples).
+2. **Feature Engineering**: Calls [`src/processing/features.py`](file:///d:/Sign%20Lang/src/processing/features.py) to compute 100+ discriminative spatial metrics (5 finger extension ratios, 4 thumb-to-knuckle distances, 10 inter-fingertip distances, and 3D palm normal orientation vectors).
+3. **Data Augmentation**: Calls [`src/processing/augmentation.py`](file:///d:/Sign%20Lang/src/processing/augmentation.py) to apply horizontal coordinate flipping, random rotation ($\pm 12^\circ$), scale scaling ($0.92 - 1.08$), and Gaussian noise, expanding the dataset to **17,498 training sequences**.
+4. **Sequence Generation**: Converts spatial landmark rows into 30-timestep temporal sequence tensors `(Batch, 30, Features)`.
+5. **Stratified Split**: Splits dataset 80% for training and 20% for validation.
+6. **Model Compilation & Training**: Compiles the 2-layer BiLSTM model with `LayerNormalization` and `Dropout(0.25)`. Trains using `Adam(lr=0.001)` with `ReduceLROnPlateau(factor=0.5, patience=4)` and `EarlyStopping(patience=8)`.
+7. **Artifact Export**:
+   - Saves production model to [`src/models/sign_bilstm.keras`](file:///d:/Sign%20Lang/src/models/sign_bilstm.keras).
+   - Generates full evaluation metrics and confusion matrix in [`src/models/model_quality.json`](file:///d:/Sign%20Lang/src/models/model_quality.json).
+   - Exports label mapping in [`src/models/model_classes.json`](file:///d:/Sign%20Lang/src/models/model_classes.json).
+
+---
+
+#### Script 5: `evaluate_all_classes.py` — Holdout Image Evaluator
+Runs an exhaustive classification benchmark across real holdout images from every letter class, evaluating camera-readiness in real-world conditions.
+
+```bash
+python scripts/evaluate_all_classes.py [OPTIONS]
+```
+
+**Supported Arguments:**
+- `--root <dir>`: Root directory of holdout images (Default: `data/online_asl`).
+- `--samples-per-class <int>`: Number of random unseen images to evaluate per letter (Default: `15`).
+
+**Outputs:**
+- Per-class accuracy percentage and average model confidence.
+- Confusion diagnostics for any misclassified signs.
+- Total benchmark accuracy summary across all 26 classes (achieving **95.87%**).
+
+**Usage Example:**
+```bash
+python scripts/evaluate_all_classes.py --samples-per-class 20
+```
+
+---
+
+#### Script 6: `export_tflite.py` — TFLite Exporter & Parity Validator
+Exports the trained Keras BiLSTM model to an edge-optimized TensorFlow Lite (`.tflite`) file and verifies mathematical parity.
+
+```bash
+python scripts/export_tflite.py
+```
+
+**Key Capabilities:**
+- **Dynamic Control Flow Wrapping**: Bidirectional LSTMs use dynamic control flow that breaks naive `from_keras_model` conversions. `export_tflite.py` wraps the model in a concrete `tf.function` signature `(1, 30, num_features)` to ensure a reliable conversion graph.
+- **Select TF Ops**: Enables `tf.lite.OpsSet.SELECT_TF_OPS` for full RNN cell operator support.
+- **Automated Parity Verification**: Generates random test tensors, executes both the Keras model and the TFLite interpreter, and confirms that maximum absolute difference is $< 10^{-7}$.
+- Outputs: [`src/models/sign_bilstm.tflite`](file:///d:/Sign%20Lang/src/models/sign_bilstm.tflite) (1.28 MB).
+
+---
+
+### 4. End-to-End Walkthrough: Retraining on Custom Data
+
+Follow this complete step-by-step tutorial to ingest new sign data, extract landmarks, and produce an updated model:
+
+#### Step 1: Collect Custom Images
+Use the in-browser studio at `http://localhost:5000/dataset` to record bursts of 20 webcam frames for your target classes, or manually place JPEG images into:
+```text
+data/online_asl/<CLASS_NAME>/
+```
+
+#### Step 2: Audit Dataset Balance
+```bash
+python scripts/check_dataset_balance.py --root data/online_asl --min-per-class 300
+```
+Fix any classes flagged as missing or underfilled.
+
+#### Step 3: Extract Landmarks & Rebuild Cache
+```bash
+python scripts/build_combined_dataset.py --input data/online_asl --max-per-class 350
+```
+This extracts MediaPipe hand landmarks from your images and writes `data/processed/online_asl_landmarks.csv` with updated metadata.
+
+#### Step 4: Retrain the Neural Network
+```bash
+python scripts/train_model.py
+```
+Trains the BiLSTM classifier, reports validation accuracy, and saves `src/models/sign_bilstm.keras`.
+
+#### Step 5: Validate on Holdout Test Images
+```bash
+python scripts/evaluate_all_classes.py
+```
+Verifies that classification accuracy across all 26 classes remains $> 95\%$.
+
+#### Step 6: Export Lightweight Edge Model
+```bash
+python scripts/export_tflite.py
+```
+Exports `src/models/sign_bilstm.tflite` for edge deployment.
 
 ---
 
