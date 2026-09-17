@@ -24,7 +24,10 @@ Thumbs.db
 archive/
 archive (1)/
 data/online_asl/
-data/processed/
+data/processed/*
+!data/processed/online_asl_landmarks.csv
+!data/processed/online_asl_landmarks.meta.json
+!data/processed/archive_image_landmarks.csv
 *.log
 
 # Trained model files and reports (track production model artifacts, ignore ad-hoc checkpoints)

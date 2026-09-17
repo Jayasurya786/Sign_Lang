@@ -468,7 +468,18 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-#### 5. Launch the Application
+#### 5. Dataset Setup (Bundled vs. Downloading Raw Images)
+- **Preprocessed Landmarks (Ready-to-Use)**: The full master landmark training dataset (`data/processed/online_asl_landmarks.csv`, 8,749 samples across all 26 classes) is **bundled directly in this repository**. You can train models, run benchmarks, or launch the app immediately!
+- **Download Raw Training Images (Optional)**: If you want to download all ~11,000 raw camera images into `data/online_asl/`, run the root-level download utility:
+  ```bash
+  # Download full raw image dataset:
+  python download.py
+
+  # Or fast download (60 images per letter class for quick testing):
+  python download.py --quick
+  ```
+
+#### 6. Launch the Application
 ```bash
 python app.py
 ```
@@ -586,11 +597,12 @@ docker run -d -p 80:5000 --restart always --name sign_app sign-lang-prod
 
 ## ️ Complete Dataset & Script Pipeline Guide
 
-The system includes an end-to-end data engineering, validation, landmark extraction, and model training pipeline located in the `scripts/` directory.
+The system includes a 1-step root download utility (`download.py`) and an end-to-end data engineering, validation, landmark extraction, and model training pipeline located in the `scripts/` directory.
 
 | Script | Command | Primary Function |
 | :--- | :--- | :--- |
-| **`download_hf_asl.py`** | `python scripts/download_hf_asl.py` | Ingests multi-source public datasets from Hugging Face into letter folders. |
+| **`download.py`** | `python download.py` | **1-Step Root Downloader**: Downloads raw ASL images, verifies bundled landmarks, supports `--quick` and `--extract`. |
+| **`download_hf_asl.py`** | `python scripts/download_hf_asl.py` | Ingests multi-source public datasets from Hugging Face Hub with in-memory caching and optional `--build-landmarks`. |
 | **`check_dataset_balance.py`** | `python scripts/check_dataset_balance.py` | Audits class distribution, identifies missing/underfilled classes, initializes folders. |
 | **`build_combined_dataset.py`** | `python scripts/build_combined_dataset.py` | Extracts MediaPipe hand landmarks from raw images and writes processed CSVs with cache tags. |
 | **`train_model.py`** | `python scripts/train_model.py` | Computes 100+ geometric features, applies 4-way augmentation, and trains the BiLSTM model. |
@@ -649,8 +661,35 @@ If `app.py` detects a valid cached CSV matching the current `CACHE_VERSION`, it 
 
 ### 3. Script-by-Script Reference & CLI Arguments
 
-#### Script 1: `download_hf_asl.py` — Hugging Face Dataset Downloader
-Downloads publicly hosted ASL datasets directly from the Hugging Face Hub, standardizes labels to uppercase `A`–`Z`, converts color spaces to RGB, and saves them sequentially.
+#### Script 1A: `download.py` — 1-Step Root Dataset Downloader & Setup
+The fastest and most convenient way to set up the raw image dataset on your machine. Located directly in the root directory.
+
+```bash
+python download.py [OPTIONS]
+```
+
+**Supported Arguments:**
+- `--quick`: Quick test mode; downloads a fast subset of at most 60 images per letter class.
+- `--extract`: Automatically runs MediaPipe landmark extraction on newly downloaded images immediately after download.
+- `--max-per-class <int>`: Custom limit on images downloaded per class (`0` for all available).
+- `--output <dir>`: Target folder for images (Default: `data/online_asl`).
+
+**Usage Examples:**
+```bash
+# Standard download (full ~11,000 images):
+python download.py
+
+# Fast download for quick testing (60 images per letter):
+python download.py --quick
+
+# Download raw images AND automatically extract landmarks in 1 step:
+python download.py --extract
+```
+
+---
+
+#### Script 1B: `scripts/download_hf_asl.py` — Hugging Face Dataset Downloader
+Direct CLI script for downloading and formatting ASL datasets from the Hugging Face Hub. Features in-memory sample indexing (100x faster than disk scanning) and live progress rates.
 
 ```bash
 python scripts/download_hf_asl.py [OPTIONS]
@@ -660,14 +699,15 @@ python scripts/download_hf_asl.py [OPTIONS]
 - `--output <dir>`: Destination folder for downloaded images (Default: `data/online_asl`).
 - `--datasets <id1> [id2 ...]`: Hugging Face dataset IDs to download (Default: `Marxulia/asl_sign_languages_alphabets_v03` and `Marxulia/asl_sign_languages_alphabets_v02`).
 - `--max-per-class <int>`: Cap the number of downloaded images per letter (`0` for unlimited).
+- `--build-landmarks`: Automatically trigger landmark extraction after image downloads complete.
 
 **Usage Examples:**
 ```bash
 # Ingest full multi-source dataset into data/online_asl:
 python scripts/download_hf_asl.py
 
-# Ingest with a maximum cap of 250 images per class:
-python scripts/download_hf_asl.py --max-per-class 250
+# Ingest with a maximum cap of 250 images per class and build landmarks:
+python scripts/download_hf_asl.py --max-per-class 250 --build-landmarks
 
 # Download from a specific custom Hugging Face repository:
 python scripts/download_hf_asl.py --datasets Marxulia/asl_sign_languages_alphabets_v03 --output data/custom_asl
