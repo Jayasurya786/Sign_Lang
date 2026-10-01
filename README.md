@@ -32,6 +32,11 @@ A complete, high-accuracy, production-ready American Sign Language (ASL) alphabe
 - [Quickstart Guide for New Users](#-quickstart-guide-for-new-users)
   - [Method 1: Docker Container (Recommended)](#method-1-docker-container-recommended)
   - [Method 2: Local Python Environment](#method-2-local-python-environment)
+- [🔄 How to Update the Project & Dependencies](#-how-to-update-the-project--dependencies)
+  - [Pulling Latest Code Updates](#1-pulling-latest-code-updates-via-git)
+  - [Updating Python Requirements & Virtual Environment](#2-updating-python-requirements--virtual-environment)
+  - [Updating Docker Containers](#3-updating-docker-containers)
+  - [Updating Datasets & Retraining Model Weights](#4-updating-datasets--retraining-model-weights)
 - [In-Depth Application User Guide](#-in-depth-application-user-guide)
   - [Real-Time Sign Recognition](#1-real-time-sign-recognition)
   - [Live Skeletal Visualizer](#2-live-skeletal-visualizer)
@@ -462,29 +467,108 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-#### 4. Install Dependencies
+#### 4. Download & Install Dependencies (Requirements)
+Ensure your virtual environment is active, upgrade `pip`, and install all project dependencies from `requirements.txt`:
 ```bash
+# Upgrade pip to latest version
 python -m pip install --upgrade pip
+
+# Download and install all required packages
 pip install -r requirements.txt
 ```
 
-#### 5. Launch the Application
+> **Requirements included**:
+> - `Flask==3.1.0` (Web server & REST API)
+> - `tensorflow==2.16.2` (Deep learning framework & TFLite runtime)
+> - `mediapipe==0.10.14` (Hand joint tracking & landmarks extraction)
+> - `opencv-python-headless==4.10.0.84` (Image processing)
+> - `numpy`, `pandas`, `scipy`, `scikit-learn` (Feature calculation & metrics)
+> - `datasets`, `huggingface-hub`, `tqdm` (Hugging Face dataset utilities)
+> - `pytest`, `pytest-cov` (Automated testing suite)
+
 #### 5. Dataset Setup (Bundled vs. Downloading Raw Images)
-- **Preprocessed Landmarks (Ready-to-Use)**: The full master landmark training dataset (`data/processed/online_asl_landmarks.csv`, 8,749 samples across all 26 classes) is **bundled directly in this repository**. You can train models, run benchmarks, or launch the app immediately!
+- **Preprocessed Landmarks (Ready-to-Use)**: The full master landmark training dataset (`data/processed/online_asl_landmarks.csv`, 7,818+ samples across all 26 classes) is **bundled directly in this repository**. You can train models, run benchmarks, or launch the app immediately!
 - **Download Raw Training Images (Optional)**: If you want to download all ~11,000 raw camera images into `data/online_asl/`, run the root-level download utility:
   ```bash
-  # Download full raw image dataset:
+  # Download full raw image dataset from Hugging Face:
   python download.py
 
   # Or fast download (60 images per letter class for quick testing):
   python download.py --quick
   ```
 
-#### 6. Launch the Application
+#### 6. Run the Application
+Start the Flask development server:
 ```bash
 python app.py
 ```
-Open **`http://127.0.0.1:5000`** in your browser.
+Then open your browser and navigate to:
+```text
+http://127.0.0.1:5000
+```
+Click **"Allow"** when prompted for webcam access.
+
+---
+
+## 🔄 How to Update the Project & Dependencies
+
+Keep your local repository, virtual environment, and model up to date using these simple steps:
+
+### 1. Pulling Latest Code Updates via Git
+To pull the newest bug fixes, UI enhancements, and model updates from the remote repository:
+```bash
+# Check current git status
+git status
+
+# Fetch and merge latest changes from the main branch
+git pull origin main
+```
+
+### 2. Updating Python Requirements & Virtual Environment
+Whenever dependencies in `requirements.txt` change:
+```bash
+# 1. Activate your virtual environment
+# Windows (PowerShell):
+.\.venv\Scripts\activate
+# Linux / macOS:
+source .venv/bin/activate
+
+# 2. Upgrade pip and reinstall/update requirements
+python -m pip install --upgrade pip
+pip install -r requirements.txt --upgrade
+
+# 3. Verify tests still pass after updates
+pytest tests/ -v
+```
+
+### 3. Updating Docker Containers
+If you run the app using Docker, rebuild the image to incorporate the newest code and package versions:
+```bash
+# Pull latest code
+git pull origin main
+
+# Rebuild image from scratch without using stale cache
+docker compose build --no-cache
+
+# Restart the updated container
+docker compose up -d
+```
+
+### 4. Updating Datasets & Retraining Model Weights
+If you captured new training samples in `/dataset` or pulled updated images:
+```bash
+# 1. Re-extract and audit dataset balance
+python scripts/check_dataset_balance.py --min-per-class 200
+
+# 2. Retrain the BiLSTM model with full feature pipeline
+python scripts/train_model.py --epochs 25 --batch-size 32
+
+# 3. Export matching high-speed TFLite model
+python scripts/export_tflite.py
+
+# 4. Verify accuracy across all 26 signs
+python scripts/evaluate_all_classes.py
+```
 
 ---
 
