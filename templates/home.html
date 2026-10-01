@@ -83,6 +83,8 @@
   </section>
 
   <script>
+    const UNKNOWN_THRESHOLD = 0.03;
+
     const preview = document.getElementById('preview');
     const skeletonCanvas = document.getElementById('skeleton-canvas');
     const gestureBadge = document.getElementById('gesture-badge');
@@ -399,10 +401,11 @@
         predicting = true;
         try {
           if (preview && preview.videoWidth && preview.videoHeight) {
-            canvas.width = Math.min(preview.videoWidth || 640, 480);
-            canvas.height = Math.min(preview.videoHeight || 480, 360);
+            canvas.width = Math.min(preview.videoWidth || 640, 640);
+            const aspect = (preview.videoHeight && preview.videoWidth) ? (preview.videoHeight / preview.videoWidth) : 0.75;
+            canvas.height = Math.round(canvas.width * aspect);
             ctx.drawImage(preview, 0, 0, canvas.width, canvas.height);
-            const image = canvas.toDataURL('image/jpeg', 0.75);
+            const image = canvas.toDataURL('image/jpeg', 0.82);
 
             if (isValidDataUrl(image)) {
               const res = await fetch('/api/predict', {
@@ -413,14 +416,22 @@
 
               const data = await res.json();
               if (res.ok && data.status === 'success') {
-                drawHandSkeleton(data.landmarks || []);
-                const displayLabel = data.label || 'Unknown';
-                updatePreviewText(displayLabel, data.control_action);
-                confidenceValue.textContent = `${(Number(data.confidence || 0) * 100).toFixed(1)}%`;
-                setStatusMessage(data.is_unknown ? 'Hold sign steady' : 'Live');
+                const hands = data.landmarks || [];
+                drawHandSkeleton(hands);
+                if (hands.length === 0) {
+                  setStatusMessage('Looking for hand...');
+                  predictionValue.textContent = '--';
+                  confidenceValue.textContent = '0.0%';
+                } else {
+                  const displayLabel = data.label || 'Unknown';
+                  updatePreviewText(displayLabel, data.control_action);
+                  confidenceValue.textContent = `${(Number(data.confidence || 0) * 100).toFixed(1)}%`;
+                  setStatusMessage(data.is_unknown ? 'Hold sign steady' : `Tracking (${hands.length} hand)`);
+                }
               } else {
                 updatePreviewText('unknown');
                 drawHandSkeleton([]);
+                setStatusMessage(data.message || 'No hand detected');
               }
             }
           }
@@ -433,14 +444,12 @@
         }
 
         if (streamActive) {
-          predictionTimer = setTimeout(predictFrame, 130);
+          predictionTimer = setTimeout(predictFrame, 120);
         }
       }
 
-      predictionTimer = setTimeout(predictFrame, 130);
+      predictionTimer = setTimeout(predictFrame, 120);
     }
-
-    const UNKNOWN_THRESHOLD = 0.03;
 
     trainBtn.addEventListener('click', trainModel);
     refreshDatasetBtn.addEventListener('click', refreshDatasetStats);

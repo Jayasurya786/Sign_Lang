@@ -4,10 +4,22 @@ import os
 
 import numpy as np
 import pandas as pd
+import keras
 import tensorflow as tf
-from tensorflow import keras
 
 from src.data.dataset_config import normalize_label_name
+
+
+@keras.saving.register_keras_serializable(package='CustomLoss')
+def sparse_focal_loss(y_true, y_pred, gamma: float = 2.0):
+    y_true_int = tf.cast(tf.reshape(y_true, [-1]), tf.int32)
+    y_pred_clipped = tf.clip_by_value(y_pred, 1e-7, 1.0 - 1e-7)
+    batch_indices = tf.range(tf.shape(y_true_int)[0])
+    indices = tf.stack([batch_indices, y_true_int], axis=1)
+    p_t = tf.gather_nd(y_pred_clipped, indices)
+    focal_weight = tf.pow(1.0 - p_t, gamma)
+    loss = -focal_weight * tf.math.log(p_t)
+    return tf.reduce_mean(loss)
 
 
 class BiLSTMClassifier:
@@ -33,16 +45,6 @@ class BiLSTMClassifier:
 
     def compile(self, gamma: float = 2.0) -> None:
         if gamma and gamma > 0:
-            def sparse_focal_loss(y_true, y_pred):
-                y_true_int = tf.cast(tf.reshape(y_true, [-1]), tf.int32)
-                y_pred_clipped = tf.clip_by_value(y_pred, 1e-7, 1.0 - 1e-7)
-                batch_indices = tf.range(tf.shape(y_true_int)[0])
-                indices = tf.stack([batch_indices, y_true_int], axis=1)
-                p_t = tf.gather_nd(y_pred_clipped, indices)
-                focal_weight = tf.pow(1.0 - p_t, gamma)
-                loss = -focal_weight * tf.math.log(p_t)
-                return tf.reduce_mean(loss)
-
             loss_fn = sparse_focal_loss
         else:
             loss_fn = 'sparse_categorical_crossentropy'

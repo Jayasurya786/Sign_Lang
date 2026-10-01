@@ -48,10 +48,22 @@ TRAINING_STATE = {'status': 'idle', 'message': 'Ready', 'dataset_source': ''}
 
 import threading
 
+_cached_keras_model = None
+_keras_model_lock = threading.Lock()
 _tflite_interpreter = None
 _tflite_lock = threading.Lock()
 _cached_extractor = None
 _extractor_lock = threading.Lock()
+
+
+def _get_cached_keras_model(model_path: str | Path = MODEL_PATH):
+    global _cached_keras_model
+    if _cached_keras_model is None:
+        with _keras_model_lock:
+            if _cached_keras_model is None:
+                _cached_keras_model = tf.keras.models.load_model(str(model_path), compile=False)
+    return _cached_keras_model
+
 
 def _get_tflite_interpreter():
     global _tflite_interpreter
@@ -63,26 +75,40 @@ def _get_tflite_interpreter():
                 _tflite_interpreter = interpreter
     return _tflite_interpreter
 
+
 def _get_cached_extractor():
     global _cached_extractor
     if _cached_extractor is None:
         with _extractor_lock:
             if _cached_extractor is None:
-                _cached_extractor = LandmarkExtractor(static_image_mode=False, max_num_hands=2, min_detection_confidence=0.35, min_tracking_confidence=0.35)
+                _cached_extractor = LandmarkExtractor(static_image_mode=True, max_num_hands=2, min_detection_confidence=0.25, min_tracking_confidence=0.25)
     return _cached_extractor
+
 
 def _tflite_predict(sequence: np.ndarray) -> np.ndarray:
     interpreter = _get_tflite_interpreter()
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
     input_data = sequence.astype(np.float32)
-    # Handle dynamic input shape
     if list(input_data.shape) != list(input_details[0]['shape']):
         interpreter.resize_tensor_input(input_details[0]['index'], list(input_data.shape))
         interpreter.allocate_tensors()
     interpreter.set_tensor(input_details[0]['index'], input_data)
     interpreter.invoke()
     return interpreter.get_tensor(output_details[0]['index'])
+
+
+def predict_sequence(sequence: np.ndarray, model_path: str | Path = MODEL_PATH) -> np.ndarray:
+    if TFLITE_MODEL_PATH.exists():
+        try:
+            interpreter = _get_tflite_interpreter()
+            in_shape = interpreter.get_input_details()[0]['shape']
+            if in_shape[-1] == sequence.shape[-1]:
+                return _tflite_predict(sequence)
+        except Exception:
+            pass
+    model = _get_cached_keras_model(model_path)
+    return model(sequence, training=False).numpy()
 
 
 def build_live_sequence(feature_row: np.ndarray, sequence_length: int = 30, history_window: deque | list | None = None) -> np.ndarray:
@@ -383,6 +409,8 @@ def _build_model_quality_report(model, X, y, labels=None):
 
 
 @app.route('/')
+@app.route('/index')
+@app.route('/home')
 def index():
     return render_template('home.html', active_page='home')
 
@@ -579,6 +607,9 @@ def api_train():
             batch_size=int(os.environ.get('SIGN_LANG_TRAIN_BATCH_SIZE', '32')),
         )
         _save_model_classes(model_classes)
+        global _cached_keras_model, _tflite_interpreter
+        _cached_keras_model = None
+        _tflite_interpreter = None
         TRAINING_STATE.update({'status': 'complete', 'message': 'Training completed successfully.'})
 
         quality_report = _build_model_quality_report(model, X, y, labels=list(range(num_classes)))
@@ -684,14 +715,9 @@ def api_predict():
                 control_action = 'OPEN_PALM'
 
         try:
-            if TFLITE_MODEL_PATH.exists():
-                preds = _tflite_predict(sequence)
-            elif Path(model_path).exists():
-                # Fallback to Keras (cached at module level)
-                model = tf.keras.models.load_model(model_path)
-                preds = model.predict(sequence, verbose=0)
-            else:
+            if not Path(model_path).exists() and not TFLITE_MODEL_PATH.exists():
                 return jsonify({'status': 'error', 'message': 'Model file not found. Train the model first.'}), 404
+            preds = predict_sequence(sequence, model_path=model_path)
         except Exception as exc:
             return jsonify({'status': 'error', 'message': f'Prediction failed: {str(exc)}'}), 500
 

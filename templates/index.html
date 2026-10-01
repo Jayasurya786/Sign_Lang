@@ -1782,10 +1782,11 @@
             if (predicting) { predictionTimer = setTimeout(predictFrame, 50); return; }
             predicting = true;
             try {
-              canvas.width = Math.min(preview.videoWidth || 640, 320);
-              canvas.height = Math.min(preview.videoHeight || 480, 240);
+              canvas.width = Math.min(preview.videoWidth || 640, 640);
+              const aspect = (preview.videoHeight && preview.videoWidth) ? (preview.videoHeight / preview.videoWidth) : 0.75;
+              canvas.height = Math.round(canvas.width * aspect);
               ctx.drawImage(preview, 0, 0, canvas.width, canvas.height);
-              const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+              const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
 
               const res = await fetch('/api/predict', {
                 method: 'POST',
