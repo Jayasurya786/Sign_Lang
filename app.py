@@ -48,22 +48,14 @@ TRAINING_STATE = {'status': 'idle', 'message': 'Ready', 'dataset_source': ''}
 
 import threading
 
-_cached_keras_model = None
-_keras_model_lock = threading.Lock()
 _tflite_interpreter = None
-_tflite_lock = threading.Lock()
+_tflite_lock = threading.RLock()
 _cached_extractor = None
-_extractor_lock = threading.Lock()
-
-
-def _get_cached_keras_model(model_path: str | Path = MODEL_PATH):
-    global _cached_keras_model
-    if _cached_keras_model is None:
-        with _keras_model_lock:
-            if _cached_keras_model is None:
-                _cached_keras_model = tf.keras.models.load_model(str(model_path), compile=False)
-    return _cached_keras_model
-
+_extractor_lock = threading.RLock()
+_keras_model = None
+_keras_lock = threading.RLock()
+_feature_window_lock = threading.RLock()
+_sentence_lock = threading.RLock()
 
 def _get_tflite_interpreter():
     global _tflite_interpreter
@@ -75,41 +67,40 @@ def _get_tflite_interpreter():
                 _tflite_interpreter = interpreter
     return _tflite_interpreter
 
+def _get_cached_keras_model(model_path: str | Path = MODEL_PATH):
+    global _keras_model
+    if _keras_model is None:
+        with _keras_lock:
+            if _keras_model is None:
+                _keras_model = tf.keras.models.load_model(str(model_path), compile=False)
+    return _keras_model
 
 def _get_cached_extractor():
     global _cached_extractor
     if _cached_extractor is None:
         with _extractor_lock:
             if _cached_extractor is None:
-                _cached_extractor = LandmarkExtractor(static_image_mode=True, max_num_hands=2, min_detection_confidence=0.25, min_tracking_confidence=0.25)
+                _cached_extractor = LandmarkExtractor(
+                    static_image_mode=False,
+                    max_num_hands=2,
+                    min_detection_confidence=0.35,
+                    min_tracking_confidence=0.3,
+                )
     return _cached_extractor
 
-
 def _tflite_predict(sequence: np.ndarray) -> np.ndarray:
-    interpreter = _get_tflite_interpreter()
-    input_details = interpreter.get_input_details()
-    output_details = interpreter.get_output_details()
-    input_data = sequence.astype(np.float32)
-    # Handle dynamic input shape
-    if list(input_data.shape) != list(input_details[0]['shape']):
-        interpreter.resize_tensor_input(input_details[0]['index'], list(input_data.shape))
-        interpreter.allocate_tensors()
-    interpreter.set_tensor(input_details[0]['index'], input_data)
-    interpreter.invoke()
-    return interpreter.get_tensor(output_details[0]['index'])
-
-
-def predict_sequence(sequence: np.ndarray, model_path: str | Path = MODEL_PATH) -> np.ndarray:
-    if TFLITE_MODEL_PATH.exists():
-        try:
-            interpreter = _get_tflite_interpreter()
-            in_shape = interpreter.get_input_details()[0]['shape']
-            if in_shape[-1] == sequence.shape[-1]:
-                return _tflite_predict(sequence)
-        except Exception:
-            pass
-    model = _get_cached_keras_model(model_path)
-    return model(sequence, training=False).numpy()
+    with _tflite_lock:
+        interpreter = _get_tflite_interpreter()
+        input_details = interpreter.get_input_details()
+        output_details = interpreter.get_output_details()
+        input_data = sequence.astype(np.float32)
+        # Handle dynamic input shape
+        if list(input_data.shape) != list(input_details[0]['shape']):
+            interpreter.resize_tensor_input(input_details[0]['index'], list(input_data.shape))
+            interpreter.allocate_tensors()
+        interpreter.set_tensor(input_details[0]['index'], input_data)
+        interpreter.invoke()
+        return interpreter.get_tensor(output_details[0]['index']).copy()
 
 
 def build_live_sequence(feature_row: np.ndarray, sequence_length: int = 30, history_window: deque | list | None = None) -> np.ndarray:
@@ -669,11 +660,15 @@ def api_predict():
                 'class_index': -1,
             })
 
-        extractor = _get_cached_extractor()
-        vector, raw_hands, num_hands = extractor.extract_landmarks_with_raw_points(frame)
+        with _extractor_lock:
+            extractor = _get_cached_extractor()
+            vector, raw_hands, num_hands = extractor.extract_landmarks_with_raw_points(frame)
+
         if vector is None:
-            LIVE_FEATURE_WINDOW.clear()
-            clear_prediction_buffer()
+            with _feature_window_lock:
+                LIVE_FEATURE_WINDOW.clear()
+            with _sentence_lock:
+                clear_prediction_buffer()
             return jsonify({
                 'status': 'success',
                 'label': 'unknown',
@@ -693,8 +688,11 @@ def api_predict():
         feature_df.columns = [f'f{i}' for i in range(feature_df.shape[1])]
         feature_df = build_feature_dataset(feature_df)
         arr = feature_df.drop(columns=['label'], errors='ignore').to_numpy(dtype=np.float32)
-        LIVE_FEATURE_WINDOW.append(arr[0])
-        sequence = build_live_sequence(arr[0], sequence_length=30, history_window=LIVE_FEATURE_WINDOW)
+        arr = np.nan_to_num(arr, nan=0.0, posinf=1.0, neginf=-1.0)
+
+        with _feature_window_lock:
+            LIVE_FEATURE_WINDOW.append(arr[0])
+            sequence = build_live_sequence(arr[0], sequence_length=30, history_window=LIVE_FEATURE_WINDOW)
 
         # Detect two-handed signs or special control gestures
         control_action = ''
@@ -711,24 +709,34 @@ def api_predict():
                 control_action = 'OPEN_PALM'
 
         try:
-            if not Path(model_path).exists() and not TFLITE_MODEL_PATH.exists():
+            if TFLITE_MODEL_PATH.exists():
+                preds = _tflite_predict(sequence)
+            elif Path(model_path).exists():
+                model = _get_cached_keras_model(model_path)
+                with _keras_lock:
+                    preds = model.predict(sequence, verbose=0)
+            else:
                 return jsonify({'status': 'error', 'message': 'Model file not found. Train the model first.'}), 404
-            preds = predict_sequence(sequence, model_path=model_path)
         except Exception as exc:
+            import traceback
+            traceback.print_exc()
             return jsonify({'status': 'error', 'message': f'Prediction failed: {str(exc)}'}), 500
 
         class_names = _load_model_classes(model_path)
         if len(class_names) != preds.shape[1]:
             class_names = class_names[:preds.shape[1]] if len(class_names) > preds.shape[1] else [str(i) for i in range(preds.shape[1])]
         result = resolve_prediction_label(preds[0], class_names=class_names, threshold=unknown_threshold)
-        now_ms = int(time.time() * 1000)
-        sentence_info = smooth_and_commit_prediction(
-            result['label'],
-            confidence=result['confidence'],
-            now_ms=now_ms,
-            inactivity_ms=2200,
-        )
-        sentence = sentence_info['sentence']
+        
+        with _sentence_lock:
+            now_ms = int(time.time() * 1000)
+            sentence_info = smooth_and_commit_prediction(
+                result['label'],
+                confidence=result['confidence'],
+                now_ms=now_ms,
+                inactivity_ms=2200,
+            )
+            sentence = sentence_info['sentence']
+
         preview = build_prediction_preview(list(sentence))
         return jsonify({
             'status': 'success',
@@ -747,6 +755,8 @@ def api_predict():
     except (ValueError, TypeError) as exc:  # pragma: no cover - runtime safeguard
         return jsonify({'status': 'error', 'message': f'Invalid image payload: {str(exc)}'}), 400
     except Exception as exc:  # pragma: no cover - runtime safeguard
+        import traceback
+        traceback.print_exc()
         return jsonify({'status': 'error', 'message': str(exc)}), 500
 
 
@@ -807,4 +817,5 @@ def api_clear_buffer():
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    debug_mode = os.environ.get('FLASK_DEBUG', '0') == '1'
+    app.run(host='0.0.0.0', port=5000, debug=debug_mode, use_reloader=False, threaded=True)

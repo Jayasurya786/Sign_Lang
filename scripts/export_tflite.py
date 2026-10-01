@@ -26,7 +26,7 @@ def export_to_tflite(
         raise FileNotFoundError(f"Keras model not found at {keras_model_path}")
 
     print(f"Loading Keras model from {keras_model_path}...")
-    model = tf.keras.models.load_model(str(keras_model_path))
+    model = tf.keras.models.load_model(str(keras_model_path), compile=False)
 
     print("Wrapping model in concrete execution signature...")
     run_model = tf.function(lambda x: model(x))

@@ -14,8 +14,9 @@ class LandmarkExtractor:
         self,
         static_image_mode: bool = True,
         max_num_hands: int = 2,
-        min_detection_confidence: float = 0.25,
-        min_tracking_confidence: float = 0.25,
+        min_detection_confidence: float = 0.35,
+        min_tracking_confidence: float = 0.3,
+        **kwargs,
     ):
         self.mp_hands = mp.solutions.hands
         self.max_num_hands = max_num_hands
