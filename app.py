@@ -465,7 +465,7 @@ def api_model_metrics():
         cleaned = clean_landmark_dataset(train_df)
         features = build_feature_dataset(cleaned)
         X, y = create_fixed_length_sequences(features, sequence_length=30)
-        model = tf.keras.models.load_model(str(MODEL_PATH), compile=False)
+        model = tf.keras.models.load_model(str(MODEL_PATH))
         report = _build_model_quality_report(model, X, y, labels=list(range(int(y.max()) + 1)))
         _save_model_quality_report(report)
         return jsonify(report)
@@ -606,9 +606,6 @@ def api_train():
             batch_size=int(os.environ.get('SIGN_LANG_TRAIN_BATCH_SIZE', '32')),
         )
         _save_model_classes(model_classes)
-        global _cached_keras_model, _tflite_interpreter
-        _cached_keras_model = None
-        _tflite_interpreter = None
         TRAINING_STATE.update({'status': 'complete', 'message': 'Training completed successfully.'})
 
         quality_report = _build_model_quality_report(model, X, y, labels=list(range(num_classes)))
