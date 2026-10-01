@@ -1276,7 +1276,7 @@
       const recallFill = document.getElementById('recall-fill');
       const f1Fill = document.getElementById('f1-fill');
 
-      const UNKNOWN_THRESHOLD = 0.03;
+      const UNKNOWN_THRESHOLD = 0.55;
       const predictionWindow = [];
 
       const datasetCards = [
@@ -1662,7 +1662,7 @@
           preview.srcObject = null;
         }
         if (predictionTimer) {
-          clearInterval(predictionTimer);
+          clearTimeout(predictionTimer);
           predictionTimer = null;
         }
         streamActive = false;
@@ -1776,12 +1776,16 @@
           const canvas = document.createElement('canvas');
           const ctx = canvas.getContext('2d');
 
-          predictionTimer = setInterval(async () => {
+          let predicting = false;
+          async function predictFrame() {
+            if (!streamActive) return;
+            if (predicting) { predictionTimer = setTimeout(predictFrame, 50); return; }
+            predicting = true;
             try {
-              canvas.width = preview.videoWidth || 640;
-              canvas.height = preview.videoHeight || 480;
+              canvas.width = Math.min(preview.videoWidth || 640, 320);
+              canvas.height = Math.min(preview.videoHeight || 480, 240);
               ctx.drawImage(preview, 0, 0, canvas.width, canvas.height);
-              const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+              const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
 
               const res = await fetch('/api/predict', {
                 method: 'POST',
@@ -1809,8 +1813,14 @@
               }
             } catch (error) {
               log(error.message || 'Prediction loop failed.');
+            } finally {
+              predicting = false;
             }
-          }, 1200);
+            if (streamActive) {
+              predictionTimer = setTimeout(predictFrame, 150);
+            }
+          }
+          predictionTimer = setTimeout(predictFrame, 150);
         } catch (error) {
           stopCamera();
           modelStatus.textContent = 'Error';

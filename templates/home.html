@@ -112,11 +112,13 @@
     let completedSentence = '';
     let lastSignalAt = 0;
 
+    let lastLetterAddedAt = 0;
+
     // Hand skeleton connections for MediaPipe 21 landmarks
     const SKELETON_CONNECTIONS = [
       [0, 1], [1, 2], [2, 3], [3, 4],        // Thumb
       [0, 5], [5, 6], [6, 7], [7, 8],        // Index
-      [0, 9], [9, 10], [10, 11], [11, 12],   // Middle
+      [0, 9], [9, 10], [10, 11], [11, 12],    // Middle
       [0, 13], [13, 14], [14, 15], [15, 16], // Ring
       [0, 17], [17, 18], [18, 19], [19, 20], // Pinky
       [5, 9], [9, 13], [13, 17]              // Palm Knuckles
@@ -199,6 +201,7 @@
       }
       completedSentence = completedSentence ? `${completedSentence} ${currentWord}` : currentWord;
       currentWord = '';
+      lastLetterAddedAt = 0;
       sentenceValue.textContent = completedSentence;
     }
 
@@ -304,13 +307,21 @@
       }
       lastPredictionAt = now;
 
+      // Repeat letter check:
+      // If the voted sign is the same as the last letter, require holding steady for >= 1200ms
+      // or at least 8 frames before appending the repeated letter (e.g. 'LL' in 'HELLO').
       if (currentWord && currentWord.slice(-1) === votedLabel) {
-        predictionValue.textContent = currentWord;
-        sentenceValue.textContent = completedSentence ? `${completedSentence} ${currentWord}` : currentWord;
-        return;
+        if (now - lastLetterAddedAt < 1200 || candidateCount < 8) {
+          predictionValue.textContent = currentWord;
+          sentenceValue.textContent = completedSentence ? `${completedSentence} ${currentWord}` : currentWord;
+          return;
+        }
       }
 
       currentWord += votedLabel;
+      lastLetterAddedAt = now;
+      candidateCount = 0; // Reset candidate count so another identical letter requires another hold cycle
+
       if (currentWord.length > 12) {
         currentWord = currentWord.slice(-12);
       }
@@ -321,6 +332,7 @@
 
     function stopCamera() {
       if (predictionTimer) {
+        clearTimeout(predictionTimer);
         clearInterval(predictionTimer);
         predictionTimer = null;
       }
@@ -344,6 +356,7 @@
       completedSentence = '';
       lastSignalAt = 0;
       lastPredictionAt = 0;
+      lastLetterAddedAt = 0;
       sentenceValue.textContent = '--';
       setStatusMessage('Idle');
     }
@@ -373,47 +386,58 @@
       streamActive = true;
       setStatusMessage('Live');
 
-      predictionTimer = setInterval(async () => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      let predicting = false;
+
+      async function predictFrame() {
+        if (!streamActive) return;
+        if (predicting) {
+          predictionTimer = setTimeout(predictFrame, 40);
+          return;
+        }
+        predicting = true;
         try {
-          if (!preview || !preview.videoWidth || !preview.videoHeight) return;
+          if (preview && preview.videoWidth && preview.videoHeight) {
+            canvas.width = Math.min(preview.videoWidth || 640, 320);
+            canvas.height = Math.min(preview.videoHeight || 480, 240);
+            ctx.drawImage(preview, 0, 0, canvas.width, canvas.height);
+            const image = canvas.toDataURL('image/jpeg', 0.65);
 
-          const canvas = document.createElement('canvas');
-          canvas.width = preview.videoWidth;
-          canvas.height = preview.videoHeight;
-          const ctx = canvas.getContext('2d');
-          if (!ctx) return;
+            if (isValidDataUrl(image)) {
+              const res = await fetch('/api/predict', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image, unknown_threshold: UNKNOWN_THRESHOLD }),
+              });
 
-          ctx.drawImage(preview, 0, 0, canvas.width, canvas.height);
-          const image = canvas.toDataURL('image/jpeg', 0.85);
-
-          if (!isValidDataUrl(image)) return;
-
-          const res = await fetch('/api/predict', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image, unknown_threshold: UNKNOWN_THRESHOLD }),
-          });
-
-          const data = await res.json();
-          if (!res.ok || data.status !== 'success') {
-            updatePreviewText('unknown');
-            drawHandSkeleton([]);
-            return;
+              const data = await res.json();
+              if (res.ok && data.status === 'success') {
+                drawHandSkeleton(data.landmarks || []);
+                const displayLabel = data.label || 'Unknown';
+                updatePreviewText(displayLabel, data.control_action);
+                confidenceValue.textContent = `${(Number(data.confidence || 0) * 100).toFixed(1)}%`;
+                setStatusMessage(data.is_unknown ? 'Hold sign steady' : 'Live');
+              } else {
+                updatePreviewText('unknown');
+                drawHandSkeleton([]);
+              }
+            }
           }
-
-          // Draw live skeleton
-          drawHandSkeleton(data.landmarks || []);
-
-          const displayLabel = data.label || 'Unknown';
-          updatePreviewText(displayLabel, data.control_action);
-          confidenceValue.textContent = `${(Number(data.confidence || 0) * 100).toFixed(1)}%`;
-          setStatusMessage(data.is_unknown ? 'Hold sign steady' : 'Live');
         } catch (error) {
           console.error('Prediction loop error:', error);
           drawHandSkeleton([]);
           setStatusMessage('Processing frame...');
+        } finally {
+          predicting = false;
         }
-      }, 1000);
+
+        if (streamActive) {
+          predictionTimer = setTimeout(predictFrame, 130);
+        }
+      }
+
+      predictionTimer = setTimeout(predictFrame, 130);
     }
 
     const UNKNOWN_THRESHOLD = 0.03;

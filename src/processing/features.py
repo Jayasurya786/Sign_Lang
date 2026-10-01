@@ -149,6 +149,28 @@ def _compute_sample_features(sample: np.ndarray) -> dict[str, float]:
     features['palm_normal_y'] = float(normal[1])
     features['palm_normal_z'] = float(normal[2])
 
+    # 1. Finger spread angle between index and middle (crucial for U vs V)
+    v_idx = sample[HAND_JOINTS['index_tip']] - sample[HAND_JOINTS['index_mcp']]
+    v_mid = sample[HAND_JOINTS['middle_tip']] - sample[HAND_JOINTS['middle_mcp']]
+    cos_spread = np.dot(v_idx, v_mid) / (np.linalg.norm(v_idx) * np.linalg.norm(v_mid) + 1e-8)
+    features['spread_angle_index_middle'] = float(np.degrees(np.arccos(np.clip(cos_spread, -1.0, 1.0))))
+
+    # 2. Finger crossing metric between index and middle (crucial for R vs U)
+    tip_dx = sample[HAND_JOINTS['index_tip']][0] - sample[HAND_JOINTS['middle_tip']][0]
+    mcp_dx = sample[HAND_JOINTS['index_mcp']][0] - sample[HAND_JOINTS['middle_mcp']][0]
+    features['finger_crossing_index_middle'] = float(tip_dx * mcp_dx)
+
+    # 3. Hand pitch / tilt orientation relative to vertical axis (crucial for G vs Q, P vs K)
+    v_hand = sample[HAND_JOINTS['middle_mcp']] - wrist_pt
+    hand_len = float(np.linalg.norm(v_hand))
+    features['hand_pitch_vertical'] = float(-v_hand[1] / hand_len) if hand_len > 1e-6 else 0.0
+
+    # 4. Proximity of index tip to middle PIP (crossed finger in R)
+    features['dist_index_tip_middle_pip'] = _euclidean_distance(sample[HAND_JOINTS['index_tip']], sample[HAND_JOINTS['middle_pip']])
+
+    # 5. Thumb tuck position relative to pinky PIP (for M vs N vs T vs A vs S)
+    features['dist_thumb_tip_pinky_pip'] = _euclidean_distance(sample[HAND_JOINTS['thumb_tip']], sample[HAND_JOINTS['pinky_pip']])
+
     return features
 
 

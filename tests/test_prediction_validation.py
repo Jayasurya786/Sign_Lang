@@ -35,23 +35,27 @@ def test_resolve_prediction_label_accepts_realistic_confidence():
     assert result['label'] == 'B'
     assert result['confidence'] == 0.82
     assert result['is_unknown'] is False
-    assert result['threshold'] == 0.03
+    assert result['threshold'] == 0.55
 
 
 def test_resolve_prediction_label_accepts_low_configured_threshold():
-    result = resolve_prediction_label(np.array([0.04, 0.96]), threshold=0.02)
+    result = resolve_prediction_label(np.array([0.04, 0.96]), threshold=0.15)
     assert result['label'] == 'B'
-    assert result['threshold'] == 0.02
+    assert result['threshold'] == 0.15
 
 
-def test_update_prediction_buffer_accumulates_sentence_without_repeating_letter():
-    from app import update_prediction_buffer
+def test_update_prediction_buffer_accumulates_sentence_and_allows_held_repeat_letter():
+    from app import clear_prediction_buffer, update_prediction_buffer
 
+    clear_prediction_buffer()
     assert update_prediction_buffer('H', now_ms=0) == 'H'
     assert update_prediction_buffer('E', now_ms=500) == 'HE'
     assert update_prediction_buffer('L', now_ms=1000) == 'HEL'
-    assert update_prediction_buffer('L', now_ms=1500) == 'HEL'
-    assert update_prediction_buffer('O', now_ms=2000) == 'HELO'
+    # Rapid duplicate (within 500ms) is discarded to eliminate jitter
+    assert update_prediction_buffer('L', now_ms=1500, repeat_hold_ms=1200) == 'HEL'
+    # Holding sign for >= 1200ms allows the second 'L' to spell 'HELL'
+    assert update_prediction_buffer('L', now_ms=2300, repeat_hold_ms=1200) == 'HELL'
+    assert update_prediction_buffer('O', now_ms=2800) == 'HELLO'
 
 
 def test_live_prediction_window_keeps_recent_frames():

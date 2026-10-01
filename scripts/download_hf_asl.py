@@ -12,6 +12,7 @@ import sys
 import time
 from pathlib import Path
 
+from datasets import load_dataset
 # Ensure project root is in sys.path
 project_root = Path(__file__).resolve().parent.parent
 if str(project_root) not in sys.path:
@@ -31,6 +32,9 @@ DEFAULT_DATASETS = [
 
 
 def download_dataset(dataset_id: str, output_root: Path, max_per_class: int = 0) -> dict[str, int]:
+    print(f'Loading dataset: {dataset_id}...')
+    dataset = load_dataset(dataset_id, split='train')
+    counts: dict[str, int] = {}
     print(f"\n[+] Connecting to Hugging Face Hub: '{dataset_id}'...")
     start_time = time.time()
     try:
@@ -40,6 +44,7 @@ def download_dataset(dataset_id: str, output_root: Path, max_per_class: int = 0)
         print("    Check your internet connection or verify Hugging Face access.")
         return {}
 
+    for row in dataset:
     total_rows = len(dataset)
     print(f"[+] Loaded '{dataset_id}' with {total_rows:,} total images.")
 
@@ -70,13 +75,20 @@ def download_dataset(dataset_id: str, output_root: Path, max_per_class: int = 0)
         class_dir = output_root / label
         class_dir.mkdir(parents=True, exist_ok=True)
 
+        existing_count = sum(1 for f in class_dir.glob('*.jpg'))
+        if max_per_class and existing_count >= max_per_class:
         current_count = existing_counts.get(label, 0)
         if max_per_class and current_count >= max_per_class:
             continue
 
+        image_number = existing_count + 1
+        img_path = class_dir / f'{image_number:05d}.jpg'
+        row['image'].convert('RGB').save(img_path, quality=95)
+        counts[label] = counts.get(label, 0) + 1
         image_number = current_count + 1
         img_path = class_dir / f"{image_number:05d}.jpg"
 
+    return counts
         try:
             row['image'].convert('RGB').save(img_path, quality=95)
             existing_counts[label] = image_number
@@ -123,8 +135,10 @@ def run_landmark_extraction(image_root: Path, output_csv: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Download public ASL alphabet datasets into labeled image folders.')
+    parser.add_argument('--output', default='data/online_asl', help='Output directory for labeled images.')
     parser.add_argument('--output', default='data/online_asl', help='Output directory for labeled images (default: data/online_asl).')
     parser.add_argument('--datasets', nargs='+', default=DEFAULT_DATASETS, help='HuggingFace dataset IDs to download.')
+    parser.add_argument('--max-per-class', type=int, default=0, help='Optional limit per class; 0 downloads every image.')
     parser.add_argument('--max-per-class', type=int, default=0, help='Optional limit per class (0 downloads all available images).')
     parser.add_argument('--build-landmarks', action='store_true', help='Automatically run landmark extraction after downloading.')
     args = parser.parse_args()
@@ -142,10 +156,18 @@ def main() -> None:
 
     total_added: dict[str, int] = {}
     for ds_id in args.datasets:
+        try:
+            added = download_dataset(ds_id, output_root, max_per_class=args.max_per_class)
+            for k, v in added.items():
+                total_added[k] = total_added.get(k, 0) + v
+            print(f'Done with {ds_id}: added {sum(added.values())} images.')
+        except Exception as exc:
+            print(f'Failed to download {ds_id}: {exc}')
         added = download_dataset(ds_id, output_root, max_per_class=args.max_per_class)
         for k, v in added.items():
             total_added[k] = total_added.get(k, 0) + v
 
+    print(f'Total new images added: {sum(total_added.values())} into {output_root}')
     print("\n" + "=" * 68)
     print(f"[SUMMARY] Total new images saved: {sum(total_added.values()):,}")
     print("=" * 68)
@@ -162,3 +184,4 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+

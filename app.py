@@ -33,6 +33,7 @@ from src.processing.sequences import create_fixed_length_sequences
 app = Flask(__name__, template_folder='templates', static_folder='static')
 
 MODEL_PATH = Path('src/models/sign_bilstm.keras')
+TFLITE_MODEL_PATH = Path('src/models/sign_bilstm.tflite')
 MODEL_METRICS_PATH = Path('src/models/model_quality.json')
 MODEL_CLASSES_PATH = Path('src/models/model_classes.json')
 ONLINE_IMAGE_DATASET = Path('data/online_asl')
@@ -41,9 +42,47 @@ DATASET_CANDIDATES = [
     Path(os.environ.get('SIGN_LANG_DATASET_PATH', '')).expanduser() if os.environ.get('SIGN_LANG_DATASET_PATH') else None,
     ONLINE_IMAGE_DATASET,
 ]
-DEFAULT_UNKNOWN_THRESHOLD = 0.03
+DEFAULT_UNKNOWN_THRESHOLD = 0.55
 LIVE_FEATURE_WINDOW = deque(maxlen=30)
 TRAINING_STATE = {'status': 'idle', 'message': 'Ready', 'dataset_source': ''}
+
+import threading
+
+_tflite_interpreter = None
+_tflite_lock = threading.Lock()
+_cached_extractor = None
+_extractor_lock = threading.Lock()
+
+def _get_tflite_interpreter():
+    global _tflite_interpreter
+    if _tflite_interpreter is None:
+        with _tflite_lock:
+            if _tflite_interpreter is None:
+                interpreter = tf.lite.Interpreter(model_path=str(TFLITE_MODEL_PATH))
+                interpreter.allocate_tensors()
+                _tflite_interpreter = interpreter
+    return _tflite_interpreter
+
+def _get_cached_extractor():
+    global _cached_extractor
+    if _cached_extractor is None:
+        with _extractor_lock:
+            if _cached_extractor is None:
+                _cached_extractor = LandmarkExtractor(static_image_mode=False, max_num_hands=2, min_detection_confidence=0.5)
+    return _cached_extractor
+
+def _tflite_predict(sequence: np.ndarray) -> np.ndarray:
+    interpreter = _get_tflite_interpreter()
+    input_details = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
+    input_data = sequence.astype(np.float32)
+    # Handle dynamic input shape
+    if list(input_data.shape) != list(input_details[0]['shape']):
+        interpreter.resize_tensor_input(input_details[0]['index'], list(input_data.shape))
+        interpreter.allocate_tensors()
+    interpreter.set_tensor(input_details[0]['index'], input_data)
+    interpreter.invoke()
+    return interpreter.get_tensor(output_details[0]['index'])
 
 
 def build_live_sequence(feature_row: np.ndarray, sequence_length: int = 30) -> np.ndarray:
@@ -120,7 +159,7 @@ def resolve_prediction_label(prediction_scores: np.ndarray, class_names: list[st
         raise ValueError('Prediction scores are empty.')
 
     threshold_value = DEFAULT_UNKNOWN_THRESHOLD if threshold is None else float(threshold)
-    threshold_value = max(0.02, min(0.35, threshold_value))
+    threshold_value = max(0.10, min(0.95, threshold_value))
 
     class_list = list(class_names) if class_names else ASL_FULL_CLASS_LIST[:scores.size]
     best_index = int(np.argmax(scores))
@@ -166,12 +205,18 @@ def build_prediction_preview(predictions: list[str] | tuple[str, ...] | None) ->
 
 LIVE_SENTENCE_BUFFER: list[str] = []
 LIVE_SENTENCE_BUFFER_TS = 0
+LIVE_SENTENCE_LAST_COMMIT_TS = 0
 LIVE_WORD_SMOOTHING: dict[str, list[float]] = {}
 
 
-def update_prediction_buffer(label: str | None, now_ms: int | None = None, inactivity_ms: int = 2200) -> str:
-    """Accumulate a sentence over successive predictions while preventing repeated duplicates."""
-    global LIVE_SENTENCE_BUFFER, LIVE_SENTENCE_BUFFER_TS
+def update_prediction_buffer(
+    label: str | None,
+    now_ms: int | None = None,
+    inactivity_ms: int = 2200,
+    repeat_hold_ms: int = 1200,
+) -> str:
+    """Accumulate a sentence over successive predictions while allowing intentional double letters after a hold."""
+    global LIVE_SENTENCE_BUFFER, LIVE_SENTENCE_BUFFER_TS, LIVE_SENTENCE_LAST_COMMIT_TS
 
     if now_ms is None:
         now_ms = int(time.time() * 1000)
@@ -185,14 +230,18 @@ def update_prediction_buffer(label: str | None, now_ms: int | None = None, inact
     if LIVE_SENTENCE_BUFFER and (now_ms - LIVE_SENTENCE_BUFFER_TS) > inactivity_ms:
         LIVE_SENTENCE_BUFFER.clear()
 
+    # If the user is repeating the same sign:
+    # Allow repeating the letter (e.g., 'LL' in 'HELLO') ONLY if held steady for at least repeat_hold_ms
     if LIVE_SENTENCE_BUFFER and LIVE_SENTENCE_BUFFER[-1] == normalized:
-        LIVE_SENTENCE_BUFFER_TS = now_ms
-        return ''.join(LIVE_SENTENCE_BUFFER)
+        if (now_ms - LIVE_SENTENCE_LAST_COMMIT_TS) < repeat_hold_ms:
+            LIVE_SENTENCE_BUFFER_TS = now_ms
+            return ''.join(LIVE_SENTENCE_BUFFER)
 
     LIVE_SENTENCE_BUFFER.append(normalized)
     if len(LIVE_SENTENCE_BUFFER) > 30:
         LIVE_SENTENCE_BUFFER = LIVE_SENTENCE_BUFFER[-30:]
     LIVE_SENTENCE_BUFFER_TS = now_ms
+    LIVE_SENTENCE_LAST_COMMIT_TS = now_ms
     return ''.join(LIVE_SENTENCE_BUFFER)
 
 
@@ -230,9 +279,10 @@ def smooth_and_commit_prediction(label: str | None, confidence: float | None = N
 
 
 def clear_prediction_buffer():
-    global LIVE_SENTENCE_BUFFER, LIVE_SENTENCE_BUFFER_TS, LIVE_WORD_SMOOTHING
+    global LIVE_SENTENCE_BUFFER, LIVE_SENTENCE_BUFFER_TS, LIVE_SENTENCE_LAST_COMMIT_TS, LIVE_WORD_SMOOTHING
     LIVE_SENTENCE_BUFFER.clear()
     LIVE_SENTENCE_BUFFER_TS = 0
+    LIVE_SENTENCE_LAST_COMMIT_TS = 0
     LIVE_WORD_SMOOTHING.clear()
 
 
@@ -583,7 +633,7 @@ def api_predict():
                 'class_index': -1,
             })
 
-        extractor = LandmarkExtractor(max_num_hands=2)
+        extractor = _get_cached_extractor()
         vector, raw_hands, num_hands = extractor.extract_landmarks_with_raw_points(frame)
         if vector is None:
             LIVE_FEATURE_WINDOW.clear()
@@ -624,11 +674,18 @@ def api_predict():
             if r_idx > 1.9 and r_mid > 1.9 and r_rng > 1.8 and r_pnk > 1.7:
                 control_action = 'OPEN_PALM'
 
-        if not Path(model_path).exists():
-            return jsonify({'status': 'error', 'message': 'Model file not found. Train the model first.'}), 404
+        try:
+            if TFLITE_MODEL_PATH.exists():
+                preds = _tflite_predict(sequence)
+            elif Path(model_path).exists():
+                # Fallback to Keras (cached at module level)
+                model = tf.keras.models.load_model(model_path)
+                preds = model.predict(sequence, verbose=0)
+            else:
+                return jsonify({'status': 'error', 'message': 'Model file not found. Train the model first.'}), 404
+        except Exception as exc:
+            return jsonify({'status': 'error', 'message': f'Prediction failed: {str(exc)}'}), 500
 
-        model = __import__('tensorflow').keras.models.load_model(model_path)
-        preds = model.predict(sequence, verbose=0)
         class_names = _load_model_classes(model_path)
         if len(class_names) != preds.shape[1]:
             class_names = class_names[:preds.shape[1]] if len(class_names) > preds.shape[1] else [str(i) for i in range(preds.shape[1])]
