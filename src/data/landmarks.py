@@ -10,7 +10,13 @@ from src.data.dataset_config import normalize_archive_label_name
 
 
 class LandmarkExtractor:
-    def __init__(self, static_image_mode: bool = True, max_num_hands: int = 2, min_detection_confidence: float = 0.25, min_tracking_confidence: float = 0.25):
+    def __init__(
+        self,
+        static_image_mode: bool = True,
+        max_num_hands: int = 2,
+        min_detection_confidence: float = 0.25,
+        min_tracking_confidence: float = 0.25,
+    ):
         self.mp_hands = mp.solutions.hands
         self.max_num_hands = max_num_hands
         self.hands = self.mp_hands.Hands(

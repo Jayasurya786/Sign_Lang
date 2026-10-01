@@ -90,6 +90,7 @@ def _tflite_predict(sequence: np.ndarray) -> np.ndarray:
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
     input_data = sequence.astype(np.float32)
+    # Handle dynamic input shape
     if list(input_data.shape) != list(input_details[0]['shape']):
         interpreter.resize_tensor_input(input_details[0]['index'], list(input_data.shape))
         interpreter.allocate_tensors()
@@ -409,8 +410,6 @@ def _build_model_quality_report(model, X, y, labels=None):
 
 
 @app.route('/')
-@app.route('/index')
-@app.route('/home')
 def index():
     return render_template('home.html', active_page='home')
 
@@ -466,7 +465,7 @@ def api_model_metrics():
         cleaned = clean_landmark_dataset(train_df)
         features = build_feature_dataset(cleaned)
         X, y = create_fixed_length_sequences(features, sequence_length=30)
-        model = tf.keras.models.load_model(str(MODEL_PATH))
+        model = tf.keras.models.load_model(str(MODEL_PATH), compile=False)
         report = _build_model_quality_report(model, X, y, labels=list(range(int(y.max()) + 1)))
         _save_model_quality_report(report)
         return jsonify(report)
