@@ -85,9 +85,18 @@ def _tflite_predict(sequence: np.ndarray) -> np.ndarray:
     return interpreter.get_tensor(output_details[0]['index'])
 
 
-def build_live_sequence(feature_row: np.ndarray, sequence_length: int = 30) -> np.ndarray:
-    """Build the static-pose sequence shape used by the trained classifier."""
+def build_live_sequence(feature_row: np.ndarray, sequence_length: int = 30, history_window: deque | list | None = None) -> np.ndarray:
+    """Build dynamic temporal sequence from sliding window buffer (capturing motion strokes J, Z) or replicate if single frame."""
     row = np.asarray(feature_row, dtype=np.float32).reshape(1, -1)
+    if history_window and len(history_window) > 1:
+        hist_arr = np.asarray(list(history_window), dtype=np.float32)
+        if len(hist_arr) < sequence_length:
+            pad_count = sequence_length - len(hist_arr)
+            pad_block = np.repeat(hist_arr[0:1], pad_count, axis=0)
+            seq = np.vstack([pad_block, hist_arr])
+        else:
+            seq = hist_arr[-sequence_length:]
+        return seq.reshape(1, sequence_length, -1)
     return np.repeat(row, sequence_length, axis=0).reshape(1, sequence_length, -1)
 
 
@@ -658,7 +667,7 @@ def api_predict():
         feature_df = build_feature_dataset(feature_df)
         arr = feature_df.drop(columns=['label'], errors='ignore').to_numpy(dtype=np.float32)
         LIVE_FEATURE_WINDOW.append(arr[0])
-        sequence = build_live_sequence(arr[0], sequence_length=30)
+        sequence = build_live_sequence(arr[0], sequence_length=30, history_window=LIVE_FEATURE_WINDOW)
 
         # Detect two-handed signs or special control gestures
         control_action = ''

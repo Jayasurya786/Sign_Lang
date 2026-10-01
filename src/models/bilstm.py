@@ -31,10 +31,25 @@ class BiLSTMClassifier:
         outputs = keras.layers.Dense(self.num_classes, activation='softmax')(x)
         return keras.Model(inputs=inputs, outputs=outputs)
 
-    def compile(self) -> None:
+    def compile(self, gamma: float = 2.0) -> None:
+        if gamma and gamma > 0:
+            def sparse_focal_loss(y_true, y_pred):
+                y_true_int = tf.cast(tf.reshape(y_true, [-1]), tf.int32)
+                y_pred_clipped = tf.clip_by_value(y_pred, 1e-7, 1.0 - 1e-7)
+                batch_indices = tf.range(tf.shape(y_true_int)[0])
+                indices = tf.stack([batch_indices, y_true_int], axis=1)
+                p_t = tf.gather_nd(y_pred_clipped, indices)
+                focal_weight = tf.pow(1.0 - p_t, gamma)
+                loss = -focal_weight * tf.math.log(p_t)
+                return tf.reduce_mean(loss)
+
+            loss_fn = sparse_focal_loss
+        else:
+            loss_fn = 'sparse_categorical_crossentropy'
+
         self.model.compile(
             optimizer=keras.optimizers.Adam(learning_rate=1e-3),
-            loss='sparse_categorical_crossentropy',
+            loss=loss_fn,
             metrics=['accuracy'],
         )
 

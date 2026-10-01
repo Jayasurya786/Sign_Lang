@@ -171,6 +171,20 @@ def _compute_sample_features(sample: np.ndarray) -> dict[str, float]:
     # 5. Thumb tuck position relative to pinky PIP (for M vs N vs T vs A vs S)
     features['dist_thumb_tip_pinky_pip'] = _euclidean_distance(sample[HAND_JOINTS['thumb_tip']], sample[HAND_JOINTS['pinky_pip']])
 
+    # 6. Thumb-to-Index Tip Aperture Ratio (Critical for C vs O separation)
+    # In 'O', thumb and index tips contact (~0); in 'C', a distinct gap exists (>0.25).
+    dist_thumb_index_tips = _euclidean_distance(sample[HAND_JOINTS['thumb_tip']], sample[HAND_JOINTS['index_tip']])
+    dist_palm_scale = _euclidean_distance(wrist_pt, sample[HAND_JOINTS['middle_mcp']]) + 1e-6
+    features['ratio_gap_thumb_index_tip'] = float(dist_thumb_index_tips / dist_palm_scale)
+
+    # 7. Thumb vertical placement relative to index/middle PIP (Critical for M vs N vs T vs S)
+    # Protrusion height indicates: under 1st knuckle in T, under 2nd in N, under 3rd in M.
+    features['thumb_rel_index_pip_y'] = float(sample[HAND_JOINTS['thumb_tip']][1] - sample[HAND_JOINTS['index_pip']][1])
+    features['thumb_rel_middle_pip_y'] = float(sample[HAND_JOINTS['thumb_tip']][1] - sample[HAND_JOINTS['middle_pip']][1])
+
+    # 8. Index tip relative depth (Z-axis offset from wrist) to isolate forward pointing in D, G, Z
+    features['index_tip_depth_z'] = float(sample[HAND_JOINTS['index_tip']][2] - wrist_pt[2])
+
     return features
 
 
