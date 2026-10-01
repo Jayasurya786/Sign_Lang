@@ -68,7 +68,7 @@ def _get_cached_extractor():
     if _cached_extractor is None:
         with _extractor_lock:
             if _cached_extractor is None:
-                _cached_extractor = LandmarkExtractor(static_image_mode=False, max_num_hands=2, min_detection_confidence=0.5)
+                _cached_extractor = LandmarkExtractor(static_image_mode=False, max_num_hands=2, min_detection_confidence=0.35, min_tracking_confidence=0.35)
     return _cached_extractor
 
 def _tflite_predict(sequence: np.ndarray) -> np.ndarray:

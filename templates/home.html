@@ -399,10 +399,10 @@
         predicting = true;
         try {
           if (preview && preview.videoWidth && preview.videoHeight) {
-            canvas.width = Math.min(preview.videoWidth || 640, 320);
-            canvas.height = Math.min(preview.videoHeight || 480, 240);
+            canvas.width = Math.min(preview.videoWidth || 640, 480);
+            canvas.height = Math.min(preview.videoHeight || 480, 360);
             ctx.drawImage(preview, 0, 0, canvas.width, canvas.height);
-            const image = canvas.toDataURL('image/jpeg', 0.65);
+            const image = canvas.toDataURL('image/jpeg', 0.75);
 
             if (isValidDataUrl(image)) {
               const res = await fetch('/api/predict', {
